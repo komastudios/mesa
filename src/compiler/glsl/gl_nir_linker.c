@@ -968,7 +968,15 @@ gl_nir_link_glsl(const struct gl_constants *consts,
    for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
       struct gl_linked_shader *shader = prog->_LinkedShaders[i];
       if (shader) {
-         if (consts->GLSLLowerConstArrays) {
+         const struct gl_shader_compiler_options *options =
+            &consts->ShaderCompilerOptions[shader->Stage];
+
+         /* If we call lower indirects on both temps and uniforms then don't
+          * calling lower_const_arrays_to_uniforms as it will only make the code
+          * worse.
+          */
+         if (consts->GLSLLowerConstArrays &&
+             !(options->EmitNoIndirectTemp && options->EmitNoIndirectUniform)) {
             nir_lower_const_arrays_to_uniforms(shader->Program->nir,
                                                consts->Program[i].MaxUniformComponents);
          }
