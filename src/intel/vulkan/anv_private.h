@@ -2728,9 +2728,9 @@ struct anv_dynamic_state {
 extern const struct anv_dynamic_state default_dynamic_state;
 
 void anv_dynamic_state_init(struct anv_dynamic_state *state);
-uint32_t anv_dynamic_state_copy(struct anv_dynamic_state *dest,
-                                const struct anv_dynamic_state *src,
-                                uint32_t copy_mask);
+anv_cmd_dirty_mask_t anv_dynamic_state_copy(struct anv_dynamic_state *dest,
+                                            const struct anv_dynamic_state *src,
+                                            anv_cmd_dirty_mask_t copy_mask);
 
 static inline struct intel_sample_position *
 anv_dynamic_state_get_sample_locations(struct anv_dynamic_state *state,
