@@ -10,11 +10,11 @@ ROOTFS_TAG=$(generate_global_rootfs_tag)
 export ROOTFS_TAG
 
 # Useful variables for local setup used during testing
-MINIO_HOST="localhost:9000"
-MINIO_PROTOCOL="http"
-MINIO_LOGIN_ENDPOINT="${MINIO_PROTOCOL}://${MINIO_HOST}"
-CHROOT_CMD="fakechroot fakeroot chroot"
-DEBOOTSTRAP_CMD="fakechroot fakeroot debootstrap"
+# MINIO_HOST="localhost:9000"
+# MINIO_PROTOCOL="http"
+# MINIO_LOGIN_ENDPOINT="${MINIO_PROTOCOL}://${MINIO_HOST}"
+# CHROOT_CMD="fakechroot fakeroot chroot"
+# DEBOOTSTRAP_CMD="fakechroot fakeroot debootstrap"
 
 export CHROOT_CMD="${CHROOT_CMD:-chroot}"
 export DEBOOTSTRAP_CMD="${DEBOOTSTRAP_CMD:-debootstrap}"
