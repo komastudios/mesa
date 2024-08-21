@@ -3308,7 +3308,8 @@ brw_from_nir_emit_tcs_intrinsic(nir_to_brw_state &ntb,
       if (mask != WRITEMASK_XYZW)
          mask_reg = brw_imm_ud(mask << 16);
 
-      brw_reg sources[4];
+      brw_reg sources[4] = { reg_undef, reg_undef,
+                             reg_undef, reg_undef };
 
       unsigned m = has_urb_lsc ? 0 : first_component;
       for (unsigned i = 0; i < num_components; i++) {

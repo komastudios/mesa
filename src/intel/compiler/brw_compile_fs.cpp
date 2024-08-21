@@ -97,8 +97,10 @@ brw_do_emit_fb_writes(brw_shader &s, int nr_color_regions, bool replicate_alpha)
       /* FINISHME: Factor out this frequently recurring pattern into a
        * helper function.
        */
+      const brw_reg alpha = s.outputs[0].file != BAD_FILE ?
+         offset(s.outputs[0], bld, 3) : reg_undef;
       const brw_reg srcs[] = { reg_undef, reg_undef,
-                              reg_undef, offset(s.outputs[0], bld, 3) };
+                               reg_undef, alpha };
       const brw_reg tmp = bld.vgrf(BRW_TYPE_UD, 4);
       bld.LOAD_PAYLOAD(tmp, srcs, 4, 0);
 

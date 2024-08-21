@@ -277,6 +277,8 @@ setup_color_payload(const brw_builder &bld, const brw_wm_prog_key *key,
 
    for (unsigned i = 0; i < components; i++)
       dst[i] = offset(color, bld, i);
+   for (unsigned i = components; i < 4; i++)
+      dst[i] = reg_undef;
 }
 
 static void
@@ -694,7 +696,7 @@ emit_load_payload_with_padding(const brw_builder &bld, const brw_reg &dst,
        */
       if (src_sz < requested_alignment_sz) {
          for (unsigned j = 0; j < (requested_alignment_sz / src_sz) - 1; j++) {
-            src_comps[length++] = retype(brw_reg(), padding_payload_type);
+            src_comps[length++] = retype(reg_undef, padding_payload_type);
          }
       }
    }
