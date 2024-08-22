@@ -155,17 +155,20 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
             sources[length++] = zero;
          }
 
-         if (vue_map->slots_valid & VARYING_BIT_LAYER)
+         if (vue_map->slots_valid & VARYING_BIT_LAYER &&
+             brw_is_valid_output(*this, VARYING_SLOT_LAYER))
             sources[length++] = this->outputs[VARYING_SLOT_LAYER];
          else
             sources[length++] = zero;
 
-         if (vue_map->slots_valid & VARYING_BIT_VIEWPORT)
+         if (vue_map->slots_valid & VARYING_BIT_VIEWPORT &&
+             brw_is_valid_output(*this, VARYING_SLOT_VIEWPORT))
             sources[length++] = this->outputs[VARYING_SLOT_VIEWPORT];
          else
             sources[length++] = zero;
 
-         if (vue_map->slots_valid & VARYING_BIT_PSIZ)
+         if (vue_map->slots_valid & VARYING_BIT_PSIZ &&
+             brw_is_valid_output(*this, VARYING_SLOT_PSIZ))
             sources[length++] = this->outputs[VARYING_SLOT_PSIZ];
          else
             sources[length++] = zero;
