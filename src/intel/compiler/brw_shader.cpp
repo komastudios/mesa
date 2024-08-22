@@ -37,6 +37,12 @@
 #include "compiler/nir/nir_builder.h"
 #include "util/u_math.h"
 
+static bool
+brw_is_valid_output(const brw_shader &s, int varying)
+{
+   return varying != BRW_VARYING_SLOT_PAD && s.outputs[varying].file != BAD_FILE;
+}
+
 void
 brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
 {
@@ -112,8 +118,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
     */
    int last_slot = vue_map->num_slots - 1;
    while (last_slot > 0 &&
-          (vue_map->slot_to_varying[last_slot] == BRW_VARYING_SLOT_PAD ||
-           outputs[vue_map->slot_to_varying[last_slot]].file == BAD_FILE)) {
+          !brw_is_valid_output(*this, vue_map->slot_to_varying[last_slot])) {
       last_slot--;
    }
 
@@ -138,7 +143,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
          bld.MOV(zero, brw_imm_ud(0u));
 
          if (vue_map->slots_valid & VARYING_BIT_PRIMITIVE_SHADING_RATE &&
-             this->outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE].file != BAD_FILE) {
+             brw_is_valid_output(*this, VARYING_SLOT_PRIMITIVE_SHADING_RATE)) {
             sources[length++] = this->outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE];
          } else if (devinfo->has_coarse_pixel_primitive_and_cb) {
             uint32_t one_fp16 = 0x3C00;
@@ -179,8 +184,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
           * slot for writing we flush a mlen 5 urb write, otherwise we just
           * advance the urb_offset.
           */
-         if (varying == BRW_VARYING_SLOT_PAD ||
-             this->outputs[varying].file == BAD_FILE) {
+         if (!brw_is_valid_output(*this, varying)) {
             if (length > 0)
                flush = true;
             else
@@ -206,7 +210,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
       const brw_builder abld = bld.annotate("URB write");
 
       /* If we've queued up 8 registers of payload (2 VUE slots), if this is
-       * the last slot or if we need to flush (see BAD_FILE varying case
+       * the last slot or if we need to flush (see invalid output varying case
        * above), emit a URB write send now to flush out the data.
        */
       if (length == 8 || (length > 0 && slot == last_slot))
