@@ -144,7 +144,7 @@ lower_urb_write_logical_send(const brw_builder &bld, brw_inst *inst)
    const unsigned length = 1 + per_slot_present + channel_mask_present +
                            inst->components_read(URB_LOGICAL_SRC_DATA);
 
-   brw_reg *payload_sources = new brw_reg[length];
+   brw_reg *payload_sources = rzalloc_array(NULL, brw_reg, length);
    brw_reg payload = retype(brw_allocate_vgrf_units(*bld.shader, length),
                             BRW_TYPE_F);
 
@@ -161,7 +161,7 @@ lower_urb_write_logical_send(const brw_builder &bld, brw_inst *inst)
 
    bld.LOAD_PAYLOAD(payload, payload_sources, length, header_size);
 
-   delete [] payload_sources;
+   ralloc_free(payload_sources);
 
    inst->opcode = SHADER_OPCODE_SEND;
    inst->header_size = header_size;
@@ -678,7 +678,7 @@ emit_load_payload_with_padding(const brw_builder &bld, const brw_reg &dst,
    unsigned length = 0;
    unsigned num_srcs =
       sources * DIV_ROUND_UP(requested_alignment_sz, bld.dispatch_width());
-   brw_reg *src_comps = new brw_reg[num_srcs];
+   brw_reg *src_comps = rzalloc_array(NULL, brw_reg, num_srcs);
 
    for (unsigned i = 0; i < header_size; i++)
       src_comps[length++] = src[i];
@@ -702,7 +702,7 @@ emit_load_payload_with_padding(const brw_builder &bld, const brw_reg &dst,
    }
 
    brw_inst *inst = bld.LOAD_PAYLOAD(dst, src_comps, length, header_size);
-   delete[] src_comps;
+   ralloc_free(src_comps);
 
    return inst;
 }
