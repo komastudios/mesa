@@ -213,8 +213,12 @@ typedef struct brw_reg {
     */
    brw_reg() {
       memset((void*)this, 0, sizeof(*this));
-      this->type = BRW_TYPE_UD;
-      this->stride = 1;
+   }
+
+   brw_reg(brw_reg_type type, uint8_t stride) {
+      memset((void*)this, 0, sizeof(*this));
+      this->type = type;
+      this->stride = stride;
       this->file = BAD_FILE;
    }
 
@@ -1513,7 +1517,9 @@ horiz_stride(brw_reg reg, unsigned s)
    return reg;
 }
 
-static const brw_reg reg_undef;
+#ifdef __cplusplus
+static const brw_reg reg_undef{BRW_TYPE_UD, 1};
+#endif
 
 /*
  * Return the stride between channels of the specified register in
