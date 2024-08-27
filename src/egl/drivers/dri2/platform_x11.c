@@ -1748,9 +1748,6 @@ dri2_initialize_x11_swrast(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
-   if (!dri2_get_xcb_connection(disp, dri2_dpy))
-      goto cleanup;
-
    /*
     * Every hardware driver_name is set using strdup. Doing the same in
     * here will allow is to simply free the memory at dri2_terminate().
@@ -1838,9 +1835,6 @@ dri2_initialize_x11_dri3(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    enum dri2_egl_driver_fail status = DRI2_EGL_DRIVER_FAILED;
-
-   if (!dri2_get_xcb_connection(disp, dri2_dpy))
-      goto cleanup;
 
    status = dri3_x11_connect(dri2_dpy, disp->Options.Zink, disp->Options.ForceSoftware);
    if (status != DRI2_EGL_DRIVER_LOADED)
@@ -1937,7 +1931,7 @@ dri2_initialize_x11_dri2(_EGLDisplay *disp)
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
    if (!dri2_get_xcb_connection(disp, dri2_dpy))
-      goto cleanup;
+      return EGL_FALSE;
 
    if (!dri2_x11_connect(dri2_dpy))
       goto cleanup;
@@ -2000,6 +1994,12 @@ EGLBoolean
 dri2_initialize_x11(_EGLDisplay *disp, bool *allow_dri2)
 {
    enum dri2_egl_driver_fail status = DRI2_EGL_DRIVER_FAILED;
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+
+
+   if (!dri2_get_xcb_connection(disp, dri2_dpy))
+      return EGL_FALSE;
+
    if (disp->Options.ForceSoftware ||
        (disp->Options.Zink && !debug_get_bool_option("LIBGL_KOPPER_DISABLE", false)))
       return dri2_initialize_x11_swrast(disp);
