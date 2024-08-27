@@ -1636,7 +1636,6 @@ dri2_get_xcb_connection(_EGLDisplay *disp, struct dri2_egl_display *dri2_dpy)
    int screen;
    const char *msg;
 
-   disp->DriverData = (void *)dri2_dpy;
    if (disp->PlatformDisplay == NULL) {
       dri2_dpy->conn = xcb_connect(NULL, &screen);
       dri2_dpy->own_device = true;
@@ -1747,7 +1746,7 @@ dri2_x11_check_multibuffers(_EGLDisplay *disp)
 static EGLBoolean
 dri2_initialize_x11_swrast(_EGLDisplay *disp)
 {
-   struct dri2_egl_display *dri2_dpy = dri2_display_create();
+   struct dri2_egl_display *dri2_dpy = dri2_display_create(disp);
    if (!dri2_dpy)
       return EGL_FALSE;
 
@@ -1840,7 +1839,7 @@ static const __DRIextension *dri3_image_loader_extensions[] = {
 static enum dri2_egl_driver_fail
 dri2_initialize_x11_dri3(_EGLDisplay *disp)
 {
-   struct dri2_egl_display *dri2_dpy = dri2_display_create();
+   struct dri2_egl_display *dri2_dpy = dri2_display_create(disp);
    enum dri2_egl_driver_fail status = DRI2_EGL_DRIVER_FAILED;
    if (!dri2_dpy)
       return DRI2_EGL_DRIVER_FAILED;
@@ -1940,7 +1939,7 @@ static const __DRIextension *dri2_loader_extensions[] = {
 static EGLBoolean
 dri2_initialize_x11_dri2(_EGLDisplay *disp)
 {
-   struct dri2_egl_display *dri2_dpy = dri2_display_create();
+   struct dri2_egl_display *dri2_dpy = dri2_display_create(disp);
    if (!dri2_dpy)
       return EGL_FALSE;
 
