@@ -626,6 +626,7 @@ transition_stencil_buffer(struct anv_cmd_buffer *cmd_buffer,
           */
          const VkClearDepthStencilValue clear_value = {};
          anv_image_hiz_clear(cmd_buffer, image, VK_IMAGE_ASPECT_STENCIL_BIT,
+                             final_layout, final_layout,
                              level, base_layer, level_layer_count,
                              clear_rect, &clear_value);
       }
@@ -5582,7 +5583,7 @@ void genX(CmdBeginRendering)(
 
                if (hiz_clear) {
                   anv_image_hiz_clear(cmd_buffer, ds_iview->image,
-                                      clear_aspects,
+                                      clear_aspects, depth_layout, stencil_layout,
                                       level, layer, 1,
                                       render_area, &clear_value);
                } else {
@@ -5600,7 +5601,7 @@ void genX(CmdBeginRendering)(
 
             if (hiz_clear) {
                anv_image_hiz_clear(cmd_buffer, ds_iview->image,
-                                   clear_aspects,
+                                   clear_aspects, depth_layout, stencil_layout,
                                    level, base_layer, layer_count,
                                    render_area, &clear_value);
             } else {
