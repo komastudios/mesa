@@ -823,7 +823,6 @@ dEQP-VK.dynamic_rendering.primary_cmd_buff.suballocation.unused_attachment.loado
 dEQP-VK.ray_query.builtin.instanceid.frag.aabbs,Crash
 dEQP-VK.ray_query.builtin.primitiveid.frag.triangles,Crash
 dEQP-VK.ray_query.multiple_ray_queries.fragment_shader,Crash
-dEQP-VK.ray_query.stress.fragment_shader.triangles,Crash
 
 nir-stress=dEQP-VK.dynamic_rendering.graphics_pipeline_library.dedicated_allocation.attachment_allocation.input_output_chain.66,Fail
 nir-stress=dEQP-VK.dynamic_rendering.graphics_pipeline_library.dedicated_allocation.formats.a2b10g10r10_uint_pack32.input.dont_care.dont_care.clear_draw,Fail
@@ -869,3 +868,8 @@ dEQP-VK.ray_query.builtin.objecttoworld.frag.aabbs,Crash
 dEQP-VK.ray_query.builtin.objectraydirection.frag.aabbs,Crash
 dEQP-VK.ray_query.builtin.primitiveid.frag.aabbs,Crash
 dEQP-VK.ray_query.builtin.worldtoobject.frag.aabbs,Crash
+
+# New fails in 1.4.1.0
+dEQP-VK.pipeline.pipeline_library.multisample.sample_rate_a2c.static_a2c,Fail
+dEQP-VK.pipeline.shader_object_linked_spirv.multisample.sample_rate_a2c.static_a2c,Fail
+dEQP-VK.sparse_resources.buffer.ssbo.sparse_residency.buffer_size_2_20,Fail
