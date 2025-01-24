@@ -441,6 +441,7 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
                 dyn_gfx_state_dirty(cmdbuf, CB_BLEND_EQUATIONS) ||
                 dyn_gfx_state_dirty(cmdbuf, CB_WRITE_MASKS) ||
                 dyn_gfx_state_dirty(cmdbuf, CB_BLEND_CONSTANTS) ||
+                dyn_gfx_state_dirty(cmdbuf, COLOR_ATTACHMENT_MAP) ||
                 fs_user_dirty(cmdbuf) || gfx_state_dirty(cmdbuf, RENDER_STATE);
 
    if (!dirty)
@@ -449,7 +450,8 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
    const struct vk_dynamic_graphics_state *dyns =
       &cmdbuf->vk.dynamic_graphics_state;
    const struct vk_color_blend_state *cb = &dyns->cb;
-   unsigned bd_count = MAX2(cb->attachment_count, 1);
+   const struct vk_color_attachment_location_state *cal = &dyns->cal;
+   uint32_t bd_count = panvk_blend_desc_count(cb, cal);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
    struct panfrost_ptr ptr =
@@ -1496,7 +1498,8 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
       struct mali_dcd_flags_0_packed dcd0;
       pan_pack(&dcd0, DCD_FLAGS_0, cfg) {
          if (fs) {
-            uint8_t rt_written = fs->info.outputs_written >> FRAG_RESULT_DATA0;
+            uint8_t rt_written = color_attachment_written_mask(
+               fs, &cmdbuf->vk.dynamic_graphics_state.cal);
             uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
                               MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
 
