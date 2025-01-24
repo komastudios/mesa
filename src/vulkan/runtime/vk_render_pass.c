@@ -761,9 +761,20 @@ vk_common_CreateRenderPass2(VkDevice _device,
 
       vk_subpass_init_ial(subpass);
 
+      subpass->cal.info = (VkRenderingAttachmentLocationInfo){
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO,
+         .pNext = &subpass->ial.info,
+         .colorAttachmentCount = desc->colorAttachmentCount,
+         .pColorAttachmentLocations = subpass->cal.colors,
+      };
+
+      /* Identity mapping by default. */
+      for (uint32_t i = 0; i < ARRAY_SIZE(subpass->cal.colors); i++)
+         subpass->cal.colors[i] = i;
+
       subpass->pipeline_info = (VkPipelineRenderingCreateInfo) {
          .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-         .pNext = &subpass->ial.info,
+         .pNext = &subpass->cal.info,
          .viewMask = desc->viewMask,
          .colorAttachmentCount = desc->colorAttachmentCount,
          .pColorAttachmentFormats = color_formats,
@@ -773,7 +784,7 @@ vk_common_CreateRenderPass2(VkDevice _device,
 
       subpass->inheritance_info = (VkCommandBufferInheritanceRenderingInfo) {
          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO,
-         .pNext = &subpass->ial.info,
+         .pNext = &subpass->cal.info,
          /* If we're inheriting, the contents are clearly in secondaries */
          .flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT,
          .viewMask = desc->viewMask,
@@ -907,6 +918,19 @@ vk_get_pipeline_rendering_ial_info(const VkGraphicsPipelineCreateInfo *info)
 
    return vk_find_struct_const(info->pNext,
                                RENDERING_INPUT_ATTACHMENT_INDEX_INFO_KHR);
+}
+
+const VkRenderingAttachmentLocationInfo *
+vk_get_pipeline_rendering_cal_info(const VkGraphicsPipelineCreateInfo *info)
+{
+   VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
+   if (render_pass != NULL) {
+      assert(info->subpass < render_pass->subpass_count);
+      return &render_pass->subpasses[info->subpass].cal.info;
+   }
+
+   return vk_find_struct_const(info->pNext,
+                               RENDERING_ATTACHMENT_LOCATION_INFO_KHR);
 }
 
 VkPipelineCreateFlags2KHR

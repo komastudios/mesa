@@ -186,6 +186,18 @@ struct vk_subpass {
       uint32_t stencil;
    } ial;
 
+   /** VkRenderingAttachmentLocationInfo for this subpass
+    *
+    * This is in the pNext chain of pipeline_info and inheritance_info.
+    *
+    * Also returned by vk_get_pipeline_rendering_cal_info() if
+    * VkGraphicsPipelineCreateInfo::renderPass != VK_NULL_HANDLE.
+    */
+   struct {
+      VkRenderingAttachmentLocationInfo info;
+      uint32_t colors[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   } cal;
+
    /** VkPipelineRenderingCreateInfo for this subpass
     *
     * Returned by vk_get_pipeline_rendering_create_info() if
@@ -354,6 +366,22 @@ vk_get_pipeline_rendering_create_info(const VkGraphicsPipelineCreateInfo *info);
  */
 const VkRenderingInputAttachmentIndexInfo *
 vk_get_pipeline_rendering_ial_info(const VkGraphicsPipelineCreateInfo *info);
+
+/** Returns the VkRenderingAttachmentLocationInfo for a graphics pipeline
+ *
+ * For render-pass-free drivers, this can be used in the implementation of
+ * vkCreateGraphicsPipelines to get the VkRenderingAttachmentLocationInfo.
+ * If VkGraphicsPipelineCreateInfo::renderPass is not VK_NULL_HANDLE, it will
+ * return a representation of the specified subpass as a
+ * VkRenderingInputAttachmentIndexInfo.  If
+ * VkGraphicsPipelineCreateInfo::renderPass
+ * is VK_NULL_HANDLE and there is a VkRenderingAttachmentLocationInfo in the
+ * pNext chain of VkGraphicsPipelineCreateInfo, it will return that.
+ *
+ * :param info: |in|  One of the pCreateInfos from vkCreateGraphicsPipelines
+ */
+const VkRenderingAttachmentLocationInfo *
+vk_get_pipeline_rendering_cal_info(const VkGraphicsPipelineCreateInfo *info);
 
 /** Returns any extra VkPipelineCreateFlags from the render pass
  *

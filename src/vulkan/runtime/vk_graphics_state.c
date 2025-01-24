@@ -1755,7 +1755,7 @@ vk_graphics_pipeline_state_fill(const struct vk_device *device,
       vk_get_pipeline_rendering_ial_info(info);
 
    const VkRenderingAttachmentLocationInfoKHR *cal_info =
-      vk_find_struct_const(info->pNext, RENDERING_ATTACHMENT_LOCATION_INFO_KHR);
+      vk_get_pipeline_rendering_cal_info(info);
 
    /*
     * Finally, fill out all the states
