@@ -418,6 +418,48 @@ vk_subpass_attachment_link_resolve(struct vk_subpass_attachment *att,
    att->resolve = resolve;
 }
 
+static void
+vk_subpass_init_ial(struct vk_subpass *subpass)
+{
+   subpass->ial.depth = VK_ATTACHMENT_UNUSED;
+   subpass->ial.stencil = VK_ATTACHMENT_UNUSED;
+   for (uint32_t i = 0; i < ARRAY_SIZE(subpass->ial.colors); i++)
+      subpass->ial.colors[i] = VK_ATTACHMENT_UNUSED;
+
+   for (uint32_t i = 0; i < subpass->color_count; i++) {
+      uint32_t col_att = subpass->color_attachments[i].attachment;
+
+      if (col_att == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      for (uint32_t j = 0; j < subpass->input_count; j++) {
+         uint32_t input_att = subpass->input_attachments[j].attachment;
+
+         if (input_att == col_att)
+            subpass->ial.colors[i] = j;
+      }
+   }
+
+   uint32_t ds_att = subpass->depth_stencil_attachment
+                        ? subpass->depth_stencil_attachment->attachment
+                        : VK_ATTACHMENT_UNUSED;
+   if (ds_att != VK_ATTACHMENT_UNUSED) {
+      const VkImageAspectFlags aspects =
+         subpass->depth_stencil_attachment->aspects;
+
+      for (uint32_t j = 0; j < subpass->input_count; j++) {
+         uint32_t input_att = subpass->input_attachments[j].attachment;
+
+         if (input_att == ds_att) {
+            if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+               subpass->ial.depth = j;
+            if (aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+               subpass->ial.stencil = j;
+         }
+      }
+   }
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 vk_common_CreateRenderPass2(VkDevice _device,
                             const VkRenderPassCreateInfo2 *pCreateInfo,
@@ -708,9 +750,20 @@ vk_common_CreateRenderPass2(VkDevice _device,
          .depthStencilAttachmentSamples = depth_stencil_samples,
       };
 
+      subpass->ial.info = (VkRenderingInputAttachmentIndexInfo){
+         .sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO,
+         .pNext = &subpass->sample_count_info_amd,
+         .colorAttachmentCount = desc->colorAttachmentCount,
+         .pColorAttachmentInputIndices = subpass->ial.colors,
+         .pDepthInputAttachmentIndex = &subpass->ial.depth,
+         .pDepthInputAttachmentIndex = &subpass->ial.stencil,
+      };
+
+      vk_subpass_init_ial(subpass);
+
       subpass->pipeline_info = (VkPipelineRenderingCreateInfo) {
          .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-         .pNext = &subpass->sample_count_info_amd,
+         .pNext = &subpass->ial.info,
          .viewMask = desc->viewMask,
          .colorAttachmentCount = desc->colorAttachmentCount,
          .pColorAttachmentFormats = color_formats,
@@ -720,7 +773,7 @@ vk_common_CreateRenderPass2(VkDevice _device,
 
       subpass->inheritance_info = (VkCommandBufferInheritanceRenderingInfo) {
          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO,
-         .pNext = &subpass->sample_count_info_amd,
+         .pNext = &subpass->ial.info,
          /* If we're inheriting, the contents are clearly in secondaries */
          .flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT,
          .viewMask = desc->viewMask,
@@ -841,6 +894,19 @@ vk_get_pipeline_rendering_create_info(const VkGraphicsPipelineCreateInfo *info)
    }
 
    return vk_find_struct_const(info->pNext, PIPELINE_RENDERING_CREATE_INFO);
+}
+
+const VkRenderingInputAttachmentIndexInfo *
+vk_get_pipeline_rendering_ial_info(const VkGraphicsPipelineCreateInfo *info)
+{
+   VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
+   if (render_pass != NULL) {
+      assert(info->subpass < render_pass->subpass_count);
+      return &render_pass->subpasses[info->subpass].ial.info;
+   }
+
+   return vk_find_struct_const(info->pNext,
+                               RENDERING_INPUT_ATTACHMENT_INDEX_INFO_KHR);
 }
 
 VkPipelineCreateFlags2KHR
