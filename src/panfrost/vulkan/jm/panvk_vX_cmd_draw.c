@@ -269,11 +269,14 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
 
          uint8_t rt_written = color_attachment_written_mask(
             fs, &cmdbuf->vk.dynamic_graphics_state.cal);
+         uint8_t rt_read =
+            color_attachment_read_mask(fs, &cmdbuf->state.gfx.sysvals);
          uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
                            MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
          cfg.properties.allow_forward_pixel_to_kill =
             fs_info->fs.can_fpk && !(rt_mask & ~rt_written) &&
-            !alpha_to_coverage && !binfo->any_dest_read;
+            !(rt_read & rt_written) && !alpha_to_coverage &&
+            !binfo->any_dest_read;
 
          bool writes_zs = writes_z || writes_s;
          bool zs_always_passes = ds_test_always_passes(cmdbuf);

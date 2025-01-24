@@ -16,6 +16,7 @@
 #include "panvk_image.h"
 #include "panvk_image_view.h"
 #include "panvk_physical_device.h"
+#include "panvk_shader.h"
 
 #include "vk_command_buffer.h"
 #include "vk_format.h"
@@ -48,6 +49,9 @@ struct panvk_rendering_state {
       VkFormat fmts[MAX_RTS];
       uint8_t samples[MAX_RTS];
       struct panvk_resolve_attachment resolve[MAX_RTS];
+#if PAN_ARCH <= 7
+      uint64_t ibds[MAX_RTS];
+#endif
    } color_attachments;
 
    struct pan_image_view zs_pview;
@@ -374,6 +378,25 @@ color_attachment_written_mask(
    }
 
    return catt_written_mask;
+}
+
+static inline uint32_t
+color_attachment_read_mask(const struct panvk_shader *fs,
+                           const struct panvk_graphics_sysvals *sysvals)
+{
+   /* If the shader was passed the attachment locations, the outputs_written
+    * bitmap contains the remapped locations. */
+   if (!shader_uses_sysval(fs, graphics, iam))
+      return fs->fs.color_attachment_read;
+
+   uint32_t catt_read_mask = 0;
+   for (uint32_t i = 0; i < ARRAY_SIZE(sysvals->iam); i++) {
+      if (shader_uses_sysval_entry(fs, graphics, iam, i) &&
+          sysvals->iam[i].target < MAX_RTS)
+         catt_read_mask |= BITFIELD_BIT(sysvals->iam[i].target);
+   }
+
+   return catt_read_mask;
 }
 
 #endif
