@@ -454,12 +454,13 @@ vk_get_command_buffer_rendering_attachment_location_info(
  * Return true if the subpass dependency is framebuffer-local.
  */
 static bool
-vk_subpass_dependency_is_fb_local(const VkSubpassDependency2 *dep,
+vk_subpass_dependency_is_fb_local(VkDependencyFlags flags,
+                                  uint32_t src_subpass, uint32_t dst_subpass,
                                   VkPipelineStageFlags2 src_stage_mask,
                                   VkPipelineStageFlags2 dst_stage_mask)
 {
-   if (dep->srcSubpass == VK_SUBPASS_EXTERNAL ||
-       dep->dstSubpass == VK_SUBPASS_EXTERNAL)
+   if (src_subpass == VK_SUBPASS_EXTERNAL ||
+       dst_subpass == VK_SUBPASS_EXTERNAL)
       return true;
 
   /* This is straight from the Vulkan 1.2 spec, section 7.1.4 "Framebuffer
@@ -482,7 +483,7 @@ vk_subpass_dependency_is_fb_local(const VkSubpassDependency2 *dep,
       return false;
 
    /* Check for framebuffer-local dependency. */
-   return dep->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT;
+   return flags & VK_DEPENDENCY_BY_REGION_BIT;
 }
 
 uint32_t

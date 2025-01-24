@@ -599,7 +599,9 @@ VkResult pvr_CreateRenderPass2(VkDevice _device,
           dep->srcSubpass != dep->dstSubpass) {
          struct pvr_render_subpass *subpass = &pass->subpasses[dep->dstSubpass];
          bool is_dep_fb_local =
-            vk_subpass_dependency_is_fb_local(dep,
+            vk_subpass_dependency_is_fb_local(dep->flags,
+                                              dep->srcSubpass,
+                                              dep->dstSubpass,
                                               dep->srcStageMask,
                                               dep->dstStageMask);
 
