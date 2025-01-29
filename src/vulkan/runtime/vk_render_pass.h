@@ -321,7 +321,7 @@ struct vk_render_pass {
    uint32_t subpass_count;
 
    /** VkRenderPassCreateInfo2::subpasses */
-   struct vk_subpass *subpasses;
+   struct vk_subpass **subpasses;
 
    /** VkRenderPassCreateInfo2::dependencyCount */
    uint32_t dependency_count;
@@ -341,7 +341,7 @@ vk_render_pass_get_subpass(const struct vk_render_pass *pass,
                            uint32_t subpass_idx)
 {
    assert(subpass_idx < pass->subpass_count);
-   return &pass->subpasses[subpass_idx];
+   return pass->subpasses[subpass_idx];
 }
 
 /** Returns the VkPipelineRenderingCreateInfo for a graphics pipeline
