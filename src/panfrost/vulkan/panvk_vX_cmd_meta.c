@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "vk_render_pass.h"
+
 #include "panvk_cmd_meta.h"
 #include "panvk_entrypoints.h"
 
@@ -183,14 +185,13 @@ panvk_per_arch(CmdResolveImage2)(VkCommandBuffer commandBuffer,
    panvk_per_arch(cmd_meta_gfx_end)(cmdbuf, &save);
 }
 
-VKAPI_ATTR void VKAPI_CALL
-panvk_per_arch(CmdClearAttachments)(VkCommandBuffer commandBuffer,
-                                    uint32_t attachmentCount,
-                                    const VkClearAttachment *pAttachments,
-                                    uint32_t rectCount,
-                                    const VkClearRect *pRects)
+void panvk_per_arch(cmd_clear_attachments)(struct panvk_cmd_buffer *cmdbuf,
+                                           const uint32_t *color_map,
+                                           uint32_t att_count,
+                                           const VkClearAttachment *atts,
+                                           uint32_t rect_count,
+                                           const VkClearRect *rects)
 {
-   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
    const struct pan_fb_info *fbinfo = &cmdbuf->state.gfx.render.fb.info;
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct panvk_cmd_meta_graphics_save_ctx save = {0};
@@ -204,7 +205,16 @@ panvk_per_arch(CmdClearAttachments)(VkCommandBuffer commandBuffer,
    /* Multiview is not supported pre-v10 */
    assert(cmdbuf->state.gfx.render.view_mask == 0 || PAN_ARCH >= 10);
 
+   if (color_map) {
+      render.remap_colors = true;
+      memcpy(render.color_map, color_map,
+             render.color_attachment_count * sizeof(render.color_map[0]));
+   }
+
    for (uint32_t i = 0; i < render.color_attachment_count; i++) {
+      if (render.remap_colors && render.color_map[i] == MESA_VK_ATTACHMENT_UNUSED)
+         continue;
+
       render.color_attachment_formats[i] =
          cmdbuf->state.gfx.render.color_attachments.fmts[i];
       render.color_attachment_write_masks[i] =
@@ -213,9 +223,30 @@ panvk_per_arch(CmdClearAttachments)(VkCommandBuffer commandBuffer,
    }
 
    panvk_per_arch(cmd_meta_gfx_start)(cmdbuf, &save);
-   vk_meta_clear_attachments(&cmdbuf->vk, &dev->meta, &render, attachmentCount,
-                             pAttachments, rectCount, pRects);
+   vk_meta_clear_attachments(&cmdbuf->vk, &dev->meta, &render, att_count, atts,
+                             rect_count, rects);
    panvk_per_arch(cmd_meta_gfx_end)(cmdbuf, &save);
+}
+
+VKAPI_ATTR void VKAPI_CALL
+panvk_per_arch(CmdClearAttachments)(VkCommandBuffer commandBuffer,
+                                    uint32_t attachmentCount,
+                                    const VkClearAttachment *pAttachments,
+                                    uint32_t rectCount,
+                                    const VkClearRect *pRects)
+{
+   VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   const struct vk_subpass *subpass =
+      cmdbuf->vk.render_pass
+         ? vk_render_pass_get_subpass(cmdbuf->vk.render_pass,
+                                      cmdbuf->vk.subpass_idx)
+         : NULL;
+   const uint32_t *color_map =
+      subpass && subpass->merged != VK_SUBPASS_NOT_MERGED ? subpass->cal.colors
+                                                          : NULL;
+
+   panvk_per_arch(cmd_clear_attachments)(cmdbuf, color_map, attachmentCount,
+                                         pAttachments, rectCount, pRects);
 }
 
 VKAPI_ATTR void VKAPI_CALL

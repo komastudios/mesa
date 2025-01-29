@@ -515,9 +515,8 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
          .layerCount = render_info->viewMask ? 1 : render_info->layerCount,
       };
 
-      panvk_per_arch(CmdClearAttachments)(panvk_cmd_buffer_to_handle(cmdbuf),
-                                          clear_att_count, clear_atts, 1,
-                                          &clear_rect);
+      panvk_per_arch(cmd_clear_attachments)(cmdbuf, NULL, clear_att_count,
+                                            clear_atts, 1, &clear_rect);
    }
 }
 

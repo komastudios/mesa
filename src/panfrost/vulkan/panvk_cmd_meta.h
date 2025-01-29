@@ -77,4 +77,11 @@ void panvk_per_arch(cmd_meta_gfx_end)(
    struct panvk_cmd_buffer *cmdbuf,
    const struct panvk_cmd_meta_graphics_save_ctx *save_ctx);
 
+void panvk_per_arch(cmd_clear_attachments)(struct panvk_cmd_buffer *cmdbuf,
+                                           const uint32_t *color_map,
+                                           uint32_t att_count,
+                                           const VkClearAttachment *atts,
+                                           uint32_t rect_count,
+                                           const VkClearRect *rects);
+
 #endif
