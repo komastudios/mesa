@@ -460,6 +460,84 @@ vk_subpass_init_ial(struct vk_subpass *subpass)
    }
 }
 
+static void
+vk_subpass_init_info(struct vk_subpass *subpass,
+                     const VkFormat *color_formats,
+                     const VkSampleCountFlagBits *color_samples,
+                     VkFormat depth_format, VkFormat stencil_format,
+                     VkSampleCountFlagBits depth_stencil_samples,
+                     const VkMultisampledRenderToSingleSampledInfoEXT *mrtss)
+{
+   subpass->sample_count_info_amd = (VkAttachmentSampleCountInfoAMD) {
+      .sType = VK_STRUCTURE_TYPE_ATTACHMENT_SAMPLE_COUNT_INFO_AMD,
+      .pNext = NULL,
+      .colorAttachmentCount = subpass->color_count,
+      .pColorAttachmentSamples = color_samples,
+      .depthStencilAttachmentSamples = depth_stencil_samples,
+   };
+
+   vk_subpass_init_ial(subpass);
+   subpass->ial.info = (VkRenderingInputAttachmentIndexInfo){
+      .sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO,
+      .pNext = &subpass->sample_count_info_amd,
+      .colorAttachmentCount = subpass->color_count,
+      .pColorAttachmentInputIndices = subpass->ial.colors,
+      .pDepthInputAttachmentIndex = &subpass->ial.depth,
+      .pDepthInputAttachmentIndex = &subpass->ial.stencil,
+   };
+
+   /* Color remapping table should be initialized by the caller. */
+   subpass->cal.info = (VkRenderingAttachmentLocationInfo){
+      .sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO,
+      .pNext = &subpass->ial.info,
+      .colorAttachmentCount = subpass->color_count,
+      .pColorAttachmentLocations = subpass->cal.colors,
+   };
+
+   subpass->pipeline_info = (VkPipelineRenderingCreateInfo) {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+      .pNext = &subpass->cal.info,
+      .viewMask = subpass->view_mask,
+      .colorAttachmentCount = subpass->color_count,
+      .pColorAttachmentFormats = color_formats,
+      .depthAttachmentFormat = depth_format,
+      .stencilAttachmentFormat = stencil_format,
+   };
+
+   VkSampleCountFlagBits samples = 0;
+
+   if (depth_format != VK_FORMAT_UNDEFINED ||
+       stencil_format != VK_FORMAT_UNDEFINED)
+      samples |= depth_stencil_samples;
+
+   for (uint32_t i = 0; i < subpass->color_count; i++) {
+      if (color_formats[i] != VK_FORMAT_UNDEFINED)
+         samples |= color_samples[i];
+   }
+
+   subpass->inheritance_info = (VkCommandBufferInheritanceRenderingInfo) {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO,
+      .pNext = &subpass->cal.info,
+      /* If we're inheriting, the contents are clearly in secondaries */
+      .flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT,
+      .viewMask = subpass->view_mask,
+      .colorAttachmentCount = subpass->color_count,
+      .pColorAttachmentFormats = color_formats,
+      .depthAttachmentFormat = depth_format,
+      .stencilAttachmentFormat = stencil_format,
+      .rasterizationSamples = samples,
+   };
+
+   if (mrtss) {
+      assert(mrtss->multisampledRenderToSingleSampledEnable);
+      subpass->mrtss = (VkMultisampledRenderToSingleSampledInfoEXT) {
+         .sType = VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT,
+         .multisampledRenderToSingleSampledEnable = VK_TRUE,
+         .rasterizationSamples = mrtss->rasterizationSamples,
+      };
+   }
+}
+
 static VkResult
 vk_subpass_create(const VkRenderPassCreateInfo2 *pCreateInfo,
                   const VkAllocationCallbacks *pAllocator,
@@ -670,7 +748,6 @@ vk_subpass_create(const VkRenderPassCreateInfo2 *pCreateInfo,
 
    VkFormat *color_formats = NULL;
    VkSampleCountFlagBits *color_samples = NULL;
-   VkSampleCountFlagBits samples = 0;
    if (desc->colorAttachmentCount > 0) {
       color_formats = subpass_color_formats;
       color_samples = subpass_color_samples;
@@ -685,8 +762,6 @@ vk_subpass_create(const VkRenderPassCreateInfo2 *pCreateInfo,
 
             color_formats[a] = att->format;
             color_samples[a] = att->samples;
-
-            samples |= att->samples;
          }
       }
    }
@@ -706,72 +781,16 @@ vk_subpass_create(const VkRenderPassCreateInfo2 *pCreateInfo,
             stencil_format = att->format;
 
          depth_stencil_samples = att->samples;
-
-         samples |= att->samples;
       }
    }
-
-   subpass->sample_count_info_amd = (VkAttachmentSampleCountInfoAMD) {
-      .sType = VK_STRUCTURE_TYPE_ATTACHMENT_SAMPLE_COUNT_INFO_AMD,
-      .pNext = NULL,
-      .colorAttachmentCount = desc->colorAttachmentCount,
-      .pColorAttachmentSamples = color_samples,
-      .depthStencilAttachmentSamples = depth_stencil_samples,
-   };
-
-   subpass->ial.info = (VkRenderingInputAttachmentIndexInfo){
-      .sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO,
-      .pNext = &subpass->sample_count_info_amd,
-      .colorAttachmentCount = desc->colorAttachmentCount,
-      .pColorAttachmentInputIndices = subpass->ial.colors,
-      .pDepthInputAttachmentIndex = &subpass->ial.depth,
-      .pDepthInputAttachmentIndex = &subpass->ial.stencil,
-   };
-
-   vk_subpass_init_ial(subpass);
-
-   subpass->cal.info = (VkRenderingAttachmentLocationInfo){
-      .sType = VK_STRUCTURE_TYPE_RENDERING_INPUT_ATTACHMENT_INDEX_INFO,
-      .pNext = &subpass->ial.info,
-      .colorAttachmentCount = desc->colorAttachmentCount,
-      .pColorAttachmentLocations = subpass->cal.colors,
-   };
 
    /* Identity mapping by default. */
    for (uint32_t i = 0; i < ARRAY_SIZE(subpass->cal.colors); i++)
       subpass->cal.colors[i] = i;
 
-   subpass->pipeline_info = (VkPipelineRenderingCreateInfo) {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-      .pNext = &subpass->cal.info,
-      .viewMask = desc->viewMask,
-      .colorAttachmentCount = desc->colorAttachmentCount,
-      .pColorAttachmentFormats = color_formats,
-      .depthAttachmentFormat = depth_format,
-      .stencilAttachmentFormat = stencil_format,
-   };
-
-   subpass->inheritance_info = (VkCommandBufferInheritanceRenderingInfo) {
-      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO,
-      .pNext = &subpass->cal.info,
-      /* If we're inheriting, the contents are clearly in secondaries */
-      .flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT,
-      .viewMask = desc->viewMask,
-      .colorAttachmentCount = desc->colorAttachmentCount,
-      .pColorAttachmentFormats = color_formats,
-      .depthAttachmentFormat = depth_format,
-      .stencilAttachmentFormat = stencil_format,
-      .rasterizationSamples = samples,
-   };
-
-   if (mrtss) {
-      assert(mrtss->multisampledRenderToSingleSampledEnable);
-      subpass->mrtss = (VkMultisampledRenderToSingleSampledInfoEXT) {
-         .sType = VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT,
-         .multisampledRenderToSingleSampledEnable = VK_TRUE,
-         .rasterizationSamples = mrtss->rasterizationSamples,
-      };
-   }
+   vk_subpass_init_info(subpass, color_formats, color_samples,
+                        depth_format, stencil_format, depth_stencil_samples,
+                        mrtss);
 
    pass->subpasses[subpass_idx] = subpass;
    return VK_SUCCESS;
