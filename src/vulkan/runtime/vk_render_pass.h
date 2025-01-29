@@ -336,6 +336,14 @@ struct vk_render_pass {
 VK_DEFINE_NONDISP_HANDLE_CASTS(vk_render_pass, base, VkRenderPass,
                                VK_OBJECT_TYPE_RENDER_PASS);
 
+static inline struct vk_subpass *
+vk_render_pass_get_subpass(const struct vk_render_pass *pass,
+                           uint32_t subpass_idx)
+{
+   assert(subpass_idx < pass->subpass_count);
+   return &pass->subpasses[subpass_idx];
+}
+
 /** Returns the VkPipelineRenderingCreateInfo for a graphics pipeline
  *
  * For render-pass-free drivers, this can be used in the implementation of

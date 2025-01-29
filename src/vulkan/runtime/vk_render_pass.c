@@ -515,7 +515,7 @@ vk_common_CreateRenderPass2(VkDevice _device,
    VkSampleCountFlagBits *next_subpass_color_samples = subpass_color_samples;
    for (uint32_t s = 0; s < pCreateInfo->subpassCount; s++) {
       const VkSubpassDescription2 *desc = &pCreateInfo->pSubpasses[s];
-      struct vk_subpass *subpass = &pass->subpasses[s];
+      struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, s);
       const VkMultisampledRenderToSingleSampledInfoEXT *mrtss =
             vk_find_struct_const(desc->pNext, MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT);
       if (mrtss && !mrtss->multisampledRenderToSingleSampledEnable)
@@ -816,7 +816,7 @@ vk_common_CreateRenderPass2(VkDevice _device,
     */
    for (uint32_t s = 0; s < pCreateInfo->subpassCount; s++) {
       struct vk_subpass *subpass =
-         &pass->subpasses[(pCreateInfo->subpassCount - 1) - s];
+         vk_render_pass_get_subpass(pass, pCreateInfo->subpassCount - 1 - s);
 
       /* First, compute last_subpass for all the attachments */
       for (uint32_t a = 0; a < subpass->attachment_count; a++) {
@@ -900,8 +900,9 @@ vk_get_pipeline_rendering_create_info(const VkGraphicsPipelineCreateInfo *info)
 {
    VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
    if (render_pass != NULL) {
-      assert(info->subpass < render_pass->subpass_count);
-      return &render_pass->subpasses[info->subpass].pipeline_info;
+      struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(render_pass, info->subpass);
+      return &subpass->pipeline_info;
    }
 
    return vk_find_struct_const(info->pNext, PIPELINE_RENDERING_CREATE_INFO);
@@ -912,8 +913,9 @@ vk_get_pipeline_rendering_ial_info(const VkGraphicsPipelineCreateInfo *info)
 {
    VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
    if (render_pass != NULL) {
-      assert(info->subpass < render_pass->subpass_count);
-      return &render_pass->subpasses[info->subpass].ial.info;
+      struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(render_pass, info->subpass);
+      return &subpass->ial.info;
    }
 
    return vk_find_struct_const(info->pNext,
@@ -925,8 +927,9 @@ vk_get_pipeline_rendering_cal_info(const VkGraphicsPipelineCreateInfo *info)
 {
    VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
    if (render_pass != NULL) {
-      assert(info->subpass < render_pass->subpass_count);
-      return &render_pass->subpasses[info->subpass].cal.info;
+      struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(render_pass, info->subpass);
+      return &subpass->cal.info;
    }
 
    return vk_find_struct_const(info->pNext,
@@ -940,7 +943,9 @@ vk_get_pipeline_rendering_flags(const VkGraphicsPipelineCreateInfo *info)
 
    VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
    if (render_pass != NULL) {
-      rendering_flags |= render_pass->subpasses[info->subpass].pipeline_flags;
+      struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(render_pass, info->subpass);
+      rendering_flags |= subpass->pipeline_flags;
       if (render_pass->fragment_density_map.attachment != VK_ATTACHMENT_UNUSED)
          rendering_flags |=
             VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT;
@@ -954,8 +959,10 @@ vk_get_pipeline_sample_count_info_amd(const VkGraphicsPipelineCreateInfo *info)
 {
    VK_FROM_HANDLE(vk_render_pass, render_pass, info->renderPass);
    if (render_pass != NULL) {
-      assert(info->subpass < render_pass->subpass_count);
-      return &render_pass->subpasses[info->subpass].sample_count_info_amd;
+      struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(render_pass, info->subpass);
+
+      return &subpass->sample_count_info_amd;
    }
 
    return vk_find_struct_const(info->pNext, ATTACHMENT_SAMPLE_COUNT_INFO_AMD);
@@ -997,8 +1004,9 @@ vk_get_command_buffer_inheritance_rendering_info(
     */
    VK_FROM_HANDLE(vk_render_pass, render_pass, inheritance->renderPass);
    if (render_pass != NULL) {
-      assert(inheritance->subpass < render_pass->subpass_count);
-      return &render_pass->subpasses[inheritance->subpass].inheritance_info;
+      struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(render_pass, inheritance->subpass);
+      return &subpass->inheritance_info;
    }
 
    return vk_find_struct_const(inheritance->pNext,
@@ -1036,7 +1044,8 @@ vk_get_command_buffer_inheritance_as_rendering_resume(
       return NULL;
 
    assert(inheritance->subpass < pass->subpass_count);
-   const struct vk_subpass *subpass = &pass->subpasses[inheritance->subpass];
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(pass, inheritance->subpass);
 
    VK_FROM_HANDLE(vk_framebuffer, fb, inheritance->framebuffer);
    if (fb == NULL || (fb->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT))
@@ -1546,7 +1555,7 @@ vk_command_buffer_get_attachment_layout(const struct vk_command_buffer *cmd_buff
    assert(render_pass != NULL);
 
    const struct vk_subpass *subpass =
-      &render_pass->subpasses[cmd_buffer->subpass_idx];
+      vk_render_pass_get_subpass(render_pass, cmd_buffer->subpass_idx);
    int first_view = ffs(subpass->view_mask) - 1;
 
    for (uint32_t a = 0; a < render_pass->attachment_count; a++) {
@@ -1568,7 +1577,7 @@ vk_command_buffer_set_attachment_layout(struct vk_command_buffer *cmd_buffer,
 {
    const struct vk_render_pass *render_pass = cmd_buffer->render_pass;
    const struct vk_subpass *subpass =
-      &render_pass->subpasses[cmd_buffer->subpass_idx];
+      vk_render_pass_get_subpass(render_pass, cmd_buffer->subpass_idx);
    uint32_t view_mask = subpass->view_mask;
    struct vk_attachment_state *att_state = &cmd_buffer->attachments[att_idx];
 
@@ -1759,7 +1768,8 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
    const struct vk_framebuffer *framebuffer = cmd_buffer->framebuffer;
    const uint32_t subpass_idx = cmd_buffer->subpass_idx;
    assert(subpass_idx < pass->subpass_count);
-   const struct vk_subpass *subpass = &pass->subpasses[subpass_idx];
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(pass, subpass_idx);
    struct vk_device_dispatch_table *disp =
       &cmd_buffer->base.device->dispatch_table;
 
@@ -2097,7 +2107,7 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
 
          assert(dep->src_subpass < pass->subpass_count);
          const struct vk_subpass *src_subpass =
-            &pass->subpasses[dep->src_subpass];
+            vk_render_pass_get_subpass(pass, dep->src_subpass);
 
          /* Figure out the set of views in the source subpass affected by this
           * dependency.
