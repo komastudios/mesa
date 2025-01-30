@@ -112,6 +112,18 @@ struct vk_subpass_attachment {
 };
 
 /***/
+enum vk_subpass_merged_state {
+   /** Subpass is independent */
+   VK_SUBPASS_NOT_MERGED,
+   /** Subpass is the first subpass in a group of merged subpasses */
+   VK_SUBPASS_MERGED_FIRST,
+   /** Subpass is a middle subpass in a group of merged subpasses */
+   VK_SUBPASS_MERGED_MID,
+   /** Subpass is the last subpass in a group of merged subpasses */
+   VK_SUBPASS_MERGED_LAST,
+};
+
+/***/
 struct vk_subpass {
    /** VkSubpassDescription2::inputAttachmentCount */
    uint32_t input_count;
@@ -211,6 +223,12 @@ struct vk_subpass {
 
    /** True if legacy dithering is enabled for this subpass. */
    bool legacy_dithering_enabled;
+
+   /** Merged state of this subpass.
+    *
+    * This will influence the actions taken on a CmdNextSubpass2().
+    */
+   enum vk_subpass_merged_state merged;
 };
 
 enum vk_subpass_attachment_type {
@@ -424,6 +442,79 @@ vk_render_pass_get_subpass(const struct vk_render_pass *pass,
    assert(subpass_idx < pass->subpass_count);
    return pass->subpasses[subpass_idx];
 }
+
+/***/
+struct vk_subpass_merging_attachment_ref {
+   /** The first subpass to write this color/depth-stencil attachment.
+    *
+    * If VK_ATTACHMENT_UNUSED, the attachment is not used by the subpasses
+    */
+   uint32_t subpass;
+
+   /** The index of this attachment in the first subpass color table */
+   uint32_t index;
+
+   /** Last subpass accessing this attachment. */
+   uint32_t last_access;
+
+   /** Number of subpasses using this attachment.
+    *
+    * If a subpass accesses it both as a render target and as an input it's
+    * only counted once.
+    */
+   uint32_t access_count;
+};
+
+/***/
+struct vk_subpass_merging_ctx {
+   /** First subpass considered for merging */
+   uint32_t first_subpass;
+   /** Last subpass considered for merging */
+   uint32_t last_subpass;
+   struct {
+      /** Color map for all subpasses covered by the group */
+      struct vk_subpass_merging_attachment_ref colors[MESA_VK_MAX_COLOR_ATTACHMENTS];
+      /** A mask of color attachments used so far */
+      uint32_t used_color_mask;
+      /** Reference to the depth attachment used by the group of subpasses */
+      struct vk_subpass_merging_attachment_ref depth;
+      /** Reference to the stencil attachment used by the group of subpasses */
+      struct vk_subpass_merging_attachment_ref stencil;
+   } attachments;
+};
+
+/** Return the next subpass range starting from start_subpass that can be merged
+ *
+ * into a single dynamic render pass. The driver can then consider this range
+ * for merging. The merging itself is done with
+ * vk_render_pass_merge_subpasses().
+ *
+ * :param pass: |in|  The render pass to consider
+ * :param first_subpass: |in|  The first subpass to consider
+ * :param ctx: |out|  Subpass merging info returned by the function
+ */
+void
+vk_render_pass_next_mergeable_range(struct vk_render_pass *pass,
+                                    uint32_t first_subpass,
+                                    uint32_t last_subpass,
+                                    struct vk_subpass_merging_ctx *ctx);
+
+/** Return a VkResult reflecting the success/failure of the subpass merging
+ *  process
+ *
+ * Once the driver has found a suitable subpass range to merge with the help
+ * of vk_render_pass_next_mergeable_range(), it can effectively merge this
+ * subpass range with vk_render_pass_merge_subpasses().
+ *
+ * :param pass: |in|  The render pass to consider
+ * :param alloc: |in|  The allocator to use for new vk_subpass object
+ * allocations
+ * :param ctx: |in|  Subpass merging info
+ */
+VkResult
+vk_render_pass_merge_subpasses(struct vk_render_pass *pass,
+                               const VkAllocationCallbacks *alloc,
+                               const struct vk_subpass_merging_ctx *ctx);
 
 /** Returns the VkPipelineRenderingCreateInfo for a graphics pipeline
  *

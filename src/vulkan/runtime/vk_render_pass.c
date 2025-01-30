@@ -30,6 +30,7 @@
 #include "vk_format.h"
 #include "vk_framebuffer.h"
 #include "vk_image.h"
+#include "vk_physical_device.h"
 #include "vk_util.h"
 
 #include "util/log.h"
@@ -793,6 +794,569 @@ vk_subpass_create(const VkRenderPassCreateInfo2 *pCreateInfo,
    return VK_SUCCESS;
 }
 
+static void
+init_subpass_merging_ctx(struct vk_render_pass *pass, uint32_t first_subpass,
+                         struct vk_subpass_merging_ctx *ctx)
+{
+   assert(first_subpass < pass->subpass_count);
+
+   const struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, first_subpass);
+
+   *ctx = (struct vk_subpass_merging_ctx){
+      .first_subpass = first_subpass,
+      .last_subpass = first_subpass,
+      .attachments = {
+         .colors = {
+            {VK_ATTACHMENT_UNUSED}, {VK_ATTACHMENT_UNUSED},
+            {VK_ATTACHMENT_UNUSED}, {VK_ATTACHMENT_UNUSED},
+            {VK_ATTACHMENT_UNUSED}, {VK_ATTACHMENT_UNUSED},
+            {VK_ATTACHMENT_UNUSED}, {VK_ATTACHMENT_UNUSED},
+         },
+         .depth = {VK_ATTACHMENT_UNUSED},
+         .stencil = {VK_ATTACHMENT_UNUSED},
+      },
+   };
+
+   assert(subpass->color_count <= ARRAY_SIZE(ctx->attachments.colors));
+
+   for (uint32_t i = 0; i < subpass->color_count; i++) {
+      if (subpass->color_attachments[i].attachment == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      ctx->attachments.colors[i] = (struct vk_subpass_merging_attachment_ref){
+         .subpass = first_subpass,
+         .access_count = 1,
+         .index = i,
+      };
+
+      ctx->attachments.used_color_mask |= BITFIELD_BIT(i);
+   }
+
+   if (subpass->depth_stencil_attachment &&
+       (subpass->depth_stencil_attachment->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)) {
+      ctx->attachments.depth = (struct vk_subpass_merging_attachment_ref){
+         .subpass = first_subpass,
+         .access_count = 1,
+      };
+   }
+
+   if (subpass->depth_stencil_attachment &&
+       (subpass->depth_stencil_attachment->aspects &
+        VK_IMAGE_ASPECT_STENCIL_BIT)) {
+      ctx->attachments.stencil = (struct vk_subpass_merging_attachment_ref){
+         .subpass = first_subpass,
+         .access_count = 1,
+      };
+   }
+}
+
+static uint32_t
+subpass_merging_ctx_get_ds_attachment(struct vk_render_pass *pass,
+                                      const struct vk_subpass_merging_ctx *ctx,
+                                      VkImageAspectFlagBits aspect)
+{
+   struct vk_subpass_merging_attachment_ref ref = {VK_ATTACHMENT_UNUSED};
+
+   if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT)
+      ref = ctx->attachments.depth;
+   else if (aspect & VK_IMAGE_ASPECT_STENCIL_BIT)
+      ref = ctx->attachments.stencil;
+
+   if (ref.subpass == VK_ATTACHMENT_UNUSED)
+      return VK_ATTACHMENT_UNUSED;
+
+   struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, ref.subpass);
+
+   return subpass->depth_stencil_attachment->attachment;
+}
+
+static uint32_t
+subpass_merging_ctx_get_col_attachment(struct vk_render_pass *pass,
+                                       const struct vk_subpass_merging_ctx *ctx,
+                                       uint32_t col_index)
+{
+   struct vk_subpass_merging_attachment_ref ref =
+      ctx->attachments.colors[col_index];
+
+   if (ref.subpass == VK_ATTACHMENT_UNUSED)
+      return VK_ATTACHMENT_UNUSED;
+
+   struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, ref.subpass);
+
+   return subpass->color_attachments[ref.index].attachment;
+}
+
+static uint32_t
+merged_subpasses_attachment_count(struct vk_render_pass *pass,
+                                  const struct vk_subpass_merging_ctx *ctx)
+{
+   uint32_t color_count = util_last_bit(ctx->attachments.used_color_mask);
+   bool has_ds = false, has_ds_reslv = false, has_col_reslv = false;
+   uint32_t input_count = 0;
+
+   for (uint32_t i = ctx->first_subpass;  i <= ctx->last_subpass; i++) {
+      struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, i);
+
+      input_count += subpass->input_count;
+      has_ds |= subpass->depth_stencil_attachment != NULL;
+      has_ds_reslv |= subpass->depth_stencil_resolve_attachment != NULL;
+      has_col_reslv |= subpass->color_resolve_count > 0;
+   }
+
+   return color_count + (has_col_reslv ? color_count : 0) + input_count +
+          (has_ds ? 1 : 0) + (has_ds_reslv ? 1 : 0);
+}
+
+VkResult
+vk_render_pass_merge_subpasses(struct vk_render_pass *pass,
+                               const VkAllocationCallbacks *alloc,
+                               const struct vk_subpass_merging_ctx *ctx)
+{
+   /* Bail out early if there's nothing to merge. */
+   if (ctx->first_subpass == ctx->last_subpass)
+      return VK_SUCCESS;
+
+   uint32_t subpass_count = ctx->last_subpass + 1 - ctx->first_subpass;
+   uint32_t att_count = merged_subpasses_attachment_count(pass, ctx);
+   uint32_t color_count = util_last_bit(ctx->attachments.used_color_mask);
+   VkSampleCountFlags depth_stencil_samples = VK_SAMPLE_COUNT_1_BIT;
+   VkFormat depth_format = VK_FORMAT_UNDEFINED;
+   VkFormat stencil_format = VK_FORMAT_UNDEFINED;
+   const VkMultisampledRenderToSingleSampledInfoEXT *mrtss = NULL;
+
+   VK_MULTIALLOC(ma);
+   VK_MULTIALLOC_DECL(&ma, struct vk_subpass, subpasses, subpass_count);
+   VK_MULTIALLOC_DECL(&ma, struct vk_subpass_attachment, atts, att_count);
+   VK_MULTIALLOC_DECL(&ma, VkFormat, color_formats, color_count);
+   VK_MULTIALLOC_DECL(&ma, VkSampleCountFlagBits, color_samples, color_count);
+
+   if (!vk_multialloc_zalloc2(&ma, &pass->base.device->alloc, alloc,
+                              VK_SYSTEM_ALLOCATION_SCOPE_OBJECT))
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+
+   struct vk_subpass subpass_tmpl = {0};
+
+   subpass_tmpl.color_count =
+      util_last_bit(ctx->attachments.used_color_mask);
+   subpass_tmpl.color_attachments = atts;
+   atts += subpass_tmpl.color_count;
+
+   for (uint32_t i = 0; i < color_count; i++) {
+      subpass_tmpl.color_attachments[i] = (struct vk_subpass_attachment){
+         .attachment = VK_ATTACHMENT_UNUSED,
+      };
+      color_formats[i] = VK_FORMAT_UNDEFINED;
+      color_samples[i] = VK_SAMPLE_COUNT_1_BIT;
+   }
+
+   uint32_t ds_att_subpass = VK_ATTACHMENT_UNUSED;
+
+   if (ctx->attachments.depth.subpass != VK_ATTACHMENT_UNUSED)
+      ds_att_subpass = ctx->attachments.depth.subpass;
+   else if (ctx->attachments.stencil.subpass != VK_ATTACHMENT_UNUSED)
+      ds_att_subpass = ctx->attachments.stencil.subpass;
+
+   struct vk_subpass *ds_first_subpass =
+      ds_att_subpass != VK_ATTACHMENT_UNUSED ?
+      vk_render_pass_get_subpass(pass, ds_att_subpass) : NULL;
+   struct vk_subpass_attachment *ds_att =
+      ds_first_subpass ? ds_first_subpass->depth_stencil_attachment : NULL;
+
+   if (ds_att) {
+      subpass_tmpl.depth_stencil_attachment = atts++;
+      *subpass_tmpl.depth_stencil_attachment = *ds_att;
+      depth_stencil_samples = pass->attachments[ds_att->attachment].samples;
+
+      if (ctx->attachments.depth.subpass != VK_ATTACHMENT_UNUSED)
+         depth_format = pass->attachments[ds_att->attachment].format;
+      if (ctx->attachments.stencil.subpass != VK_ATTACHMENT_UNUSED)
+         stencil_format = pass->attachments[ds_att->attachment].format;
+   }
+
+   for (uint32_t i = ctx->first_subpass;  i <= ctx->last_subpass; i++) {
+      struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, i);
+
+      if (i == ctx->first_subpass &&
+          subpass->mrtss.multisampledRenderToSingleSampledEnable)
+         mrtss = &subpass->mrtss;
+
+      subpass_tmpl.view_mask |= subpass->view_mask;
+
+      if (subpass->color_resolve_count > 0 &&
+          subpass_tmpl.color_resolve_count == 0) {
+         subpass_tmpl.color_resolve_count = subpass->color_count;
+         subpass_tmpl.color_resolve_attachments = atts;
+         atts += subpass->color_count;
+         for (uint32_t j = 0; j < color_count; j++) {
+            subpass->color_resolve_attachments[j] = (struct vk_subpass_attachment){
+               .attachment = VK_ATTACHMENT_UNUSED,
+            };
+         }
+      }
+
+      if (subpass->depth_stencil_resolve_attachment &&
+          !subpass_tmpl.depth_stencil_resolve_attachment) {
+         subpass_tmpl.depth_stencil_resolve_attachment = atts++;
+         *subpass_tmpl.depth_stencil_resolve_attachment =
+            *subpass->depth_stencil_resolve_attachment;
+         subpass_tmpl.depth_stencil_attachment->resolve =
+            subpass_tmpl.depth_stencil_resolve_attachment;
+      }
+
+      if (subpass->depth_resolve_mode != VK_RESOLVE_MODE_NONE)
+         subpass_tmpl.depth_resolve_mode = subpass->depth_resolve_mode;
+
+      if (subpass->stencil_resolve_mode != VK_RESOLVE_MODE_NONE)
+         subpass_tmpl.stencil_resolve_mode = subpass->stencil_resolve_mode;
+   }
+
+   for (uint32_t i = 0; i < color_count; i++) {
+      struct vk_subpass_merging_attachment_ref ref = ctx->attachments.colors[i];
+
+      if (ref.subpass == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      const struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(pass, ref.subpass);
+
+      subpass_tmpl.color_attachments[i] =
+         subpass->color_attachments[ref.index];
+
+      uint32_t att_idx = subpass_tmpl.color_attachments[i].attachment;
+      const struct vk_render_pass_attachment *att = &pass->attachments[att_idx];
+
+      color_formats[i] = att->format;
+      color_samples[i] = att->samples;
+
+      if (subpass->color_resolve_attachments) {
+         subpass_tmpl.color_resolve_attachments[i] =
+            subpass->color_resolve_attachments[ref.index];
+         subpass_tmpl.color_attachments[i].resolve =
+            &subpass_tmpl.color_resolve_attachments[i];
+      }
+   }
+
+   for (uint32_t i = ctx->first_subpass;  i <= ctx->last_subpass; i++) {
+      const struct vk_subpass *orig_subpass = vk_render_pass_get_subpass(pass, i);
+
+      for (uint32_t j = 0; j < orig_subpass->input_count; j++) {
+         struct vk_subpass_attachment *orig_ia =
+            &orig_subpass->input_attachments[j];
+         if (orig_ia->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         for (uint32_t k = 0; k < color_count; k++) {
+            if (orig_ia->attachment ==
+                   subpass_tmpl.color_attachments[k].attachment) {
+               subpass_tmpl.pipeline_flags |=
+                  VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+               break;
+            }
+         }
+
+         if (ds_att && orig_ia->attachment == ds_att->attachment &&
+             (ds_att->aspects &
+              (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))) {
+            subpass_tmpl.pipeline_flags |=
+               VK_PIPELINE_CREATE_DEPTH_STENCIL_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+         }
+      }
+   }
+
+   for (uint32_t i = ctx->first_subpass;  i <= ctx->last_subpass; i++) {
+      const struct vk_subpass *orig_subpass = vk_render_pass_get_subpass(pass, i);
+      struct vk_subpass *new_subpass = &subpasses[i - ctx->first_subpass];
+
+      *new_subpass = subpass_tmpl;
+      if (i == ctx->first_subpass)
+         new_subpass->merged = VK_SUBPASS_MERGED_FIRST;
+      else if (i == ctx->last_subpass)
+         new_subpass->merged = VK_SUBPASS_MERGED_LAST;
+      else
+         new_subpass->merged = VK_SUBPASS_MERGED_MID;
+
+      new_subpass->cal.info.colorAttachmentCount = color_count;
+      new_subpass->cal.info.pColorAttachmentLocations = new_subpass->cal.colors;
+      for (uint32_t k = 0; k < color_count; k++)
+         new_subpass->cal.colors[k] = VK_ATTACHMENT_UNUSED;
+
+      for (uint32_t j = 0; j < orig_subpass->color_count; j++) {
+         struct vk_subpass_attachment *orig_ca =
+            &orig_subpass->color_attachments[j];
+         if (orig_ca->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         for (uint32_t k = 0; k < color_count; k++) {
+           if (orig_ca->attachment ==
+                  subpass_tmpl.color_attachments[k].attachment) {
+               new_subpass->cal.colors[k] = j;
+               break;
+            }
+         }
+      }
+
+      for (uint32_t j = 0; j < orig_subpass->input_count; j++) {
+         struct vk_subpass_attachment *orig_ia =
+            &orig_subpass->input_attachments[j];
+         if (orig_ia->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         struct vk_subpass_attachment *new_ia = NULL;
+         for (uint32_t k = 0; k < new_subpass->input_count && !new_ia; k++) {
+            if (new_subpass->input_attachments[k].attachment ==
+                   orig_ia->attachment) {
+               new_ia = &new_subpass->input_attachments[k];
+            }
+         }
+
+         if (new_ia) {
+            new_ia->last_subpass |= orig_ia->last_subpass;
+         } else {
+            new_ia = atts++;
+            *new_ia = *orig_ia;
+            if (!new_subpass->input_count)
+               new_subpass->input_attachments = new_ia;
+
+            new_subpass->input_count++;
+         }
+      }
+
+      vk_subpass_init_info(new_subpass, color_formats, color_samples,
+                           depth_format, stencil_format, depth_stencil_samples,
+                           mrtss);
+   }
+
+   for (uint32_t i = ctx->first_subpass;  i <= ctx->last_subpass; i++) {
+      vk_free2(&pass->base.device->alloc, alloc, pass->subpasses[i]);
+      pass->subpasses[i] = &subpasses[i - ctx->first_subpass];
+   }
+
+   return VK_SUCCESS;
+}
+
+static bool
+can_merge_next_subpass(struct vk_render_pass *pass,
+                       struct vk_subpass_merging_ctx *ctx)
+{
+   /* We reached the end of the pass. */
+   if (ctx->last_subpass + 1 == pass->subpass_count)
+      return false;
+
+   const struct vk_physical_device *phys_dev = pass->base.device->physical;
+   const struct vk_subpass *lsubpass =
+      vk_render_pass_get_subpass(pass, ctx->last_subpass + 1);
+   const struct vk_subpass *fsubpass =
+      vk_render_pass_get_subpass(pass, ctx->first_subpass);
+
+   /* FIXME: we don't merge subpasses when fragment shading rate is enabled to
+    * keep things simple. */
+   if (fsubpass->fragment_shading_rate_attachment ||
+       lsubpass->fragment_shading_rate_attachment)
+      return false;
+
+   /* Resolve modes must match. */
+   if (fsubpass->depth_resolve_mode != VK_RESOLVE_MODE_NONE &&
+       lsubpass->depth_resolve_mode != VK_RESOLVE_MODE_NONE &&
+       fsubpass->depth_resolve_mode != lsubpass->depth_resolve_mode)
+      return false;
+
+   if (fsubpass->stencil_resolve_mode != VK_RESOLVE_MODE_NONE &&
+       lsubpass->stencil_resolve_mode != VK_RESOLVE_MODE_NONE &&
+       fsubpass->stencil_resolve_mode != lsubpass->stencil_resolve_mode)
+      return false;
+
+   if (fsubpass->legacy_dithering_enabled != lsubpass->legacy_dithering_enabled)
+      return false;
+
+   if (fsubpass->mrtss.multisampledRenderToSingleSampledEnable !=
+          lsubpass->mrtss.multisampledRenderToSingleSampledEnable ||
+       fsubpass->mrtss.rasterizationSamples !=
+          lsubpass->mrtss.rasterizationSamples)
+      return false;
+
+   /* First make sure all subpass dependencies for the range we consider
+    * merging are FB-local. If one of them isn't, we can't merge. */
+   for (uint32_t i = 0; i < pass->dependency_count; i++) {
+      struct vk_subpass_dependency *dep = &pass->dependencies[i];
+
+      if (dep->dst_subpass != ctx->last_subpass + 1 ||
+          dep->src_subpass == VK_SUBPASS_EXTERNAL ||
+          dep->dst_subpass == VK_SUBPASS_EXTERNAL ||
+          dep->src_subpass < ctx->first_subpass ||
+          dep->src_subpass > ctx->last_subpass + 1)
+         continue;
+
+      if (!vk_subpass_dependency_is_fb_local(dep->flags,
+                                             dep->src_subpass,
+                                             dep->dst_subpass,
+                                             dep->src_stage_mask,
+                                             dep->dst_stage_mask))
+         return false;
+   }
+
+   uint32_t color_used_mask = 0;
+   bool depth_used = false, stencil_used = false;
+   uint32_t depth_att =
+      lsubpass->depth_stencil_attachment &&
+      (lsubpass->depth_stencil_attachment->aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
+         ? lsubpass->depth_stencil_attachment->attachment
+         : VK_ATTACHMENT_UNUSED;
+   uint32_t prev_depth_att =
+      subpass_merging_ctx_get_ds_attachment(pass, ctx,
+                                            VK_IMAGE_ASPECT_DEPTH_BIT);
+   uint32_t stencil_att =
+      lsubpass->depth_stencil_attachment &&
+      (lsubpass->depth_stencil_attachment->aspects & VK_IMAGE_ASPECT_STENCIL_BIT)
+         ? lsubpass->depth_stencil_attachment->attachment
+         : VK_ATTACHMENT_UNUSED;
+   uint32_t prev_stencil_att =
+      subpass_merging_ctx_get_ds_attachment(pass, ctx,
+                                            VK_IMAGE_ASPECT_STENCIL_BIT);
+
+   /* If the depth/stencil attachments don't match we can't merge. */
+   if (depth_att != VK_ATTACHMENT_UNUSED) {
+      if ((prev_depth_att != VK_ATTACHMENT_UNUSED &&
+           prev_depth_att != depth_att) ||
+          (prev_stencil_att != VK_ATTACHMENT_UNUSED &&
+           prev_stencil_att != depth_att))
+         return false;
+
+      depth_used = true;
+   }
+
+   if (stencil_att != VK_ATTACHMENT_UNUSED) {
+      if ((prev_stencil_att != VK_ATTACHMENT_UNUSED &&
+           prev_stencil_att != stencil_att) ||
+          (prev_depth_att != VK_ATTACHMENT_UNUSED &&
+           prev_depth_att != stencil_att))
+         return false;
+
+      stencil_used = true;
+   }
+
+   uint32_t free_colors =
+      ~ctx->attachments.used_color_mask &
+      BITFIELD_MASK(phys_dev->properties.maxColorAttachments);
+   uint32_t missing_color_mask = 0;
+
+   for (uint32_t i = 0; i < lsubpass->color_count; i++) {
+      uint32_t col_att = lsubpass->color_attachments[i].attachment;
+
+      if (col_att == VK_ATTACHMENT_UNUSED)
+         break;
+
+      bool found = false;
+      u_foreach_bit(j, ctx->attachments.used_color_mask) {
+         uint32_t existing_col_att =
+            subpass_merging_ctx_get_col_attachment(pass, ctx, j);
+         if (col_att == existing_col_att) {
+            color_used_mask |= BITFIELD_BIT(j);
+            found = true;
+            break;
+         }
+      }
+
+      if (!found)
+         missing_color_mask |= BITFIELD_BIT(i);
+   }
+
+   /* If there's more colors than we have slots, we can't merge. */
+   if (util_bitcount(missing_color_mask) > util_bitcount(free_colors))
+      return false;
+
+   u_foreach_bit(i, missing_color_mask) {
+      uint32_t j = u_bit_scan(&free_colors);
+
+      ctx->attachments.colors[j] = (struct vk_subpass_merging_attachment_ref){
+         .subpass = ctx->last_subpass + 1,
+         .index = i,
+      };
+      ctx->attachments.used_color_mask |= BITFIELD_BIT(j);
+      color_used_mask |= BITFIELD_BIT(j);
+   }
+
+   if (depth_used &&
+       ctx->attachments.depth.subpass == VK_ATTACHMENT_UNUSED)
+      ctx->attachments.depth.subpass = ctx->last_subpass + 1;
+
+   if (stencil_used &&
+       ctx->attachments.stencil.subpass == VK_ATTACHMENT_UNUSED)
+      ctx->attachments.stencil.subpass = ctx->last_subpass + 1;
+
+   for (uint32_t i = 0; i < lsubpass->input_count; i++) {
+      const struct vk_subpass_attachment *ia = &lsubpass->input_attachments[i];
+
+      if (ia->attachment == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      u_foreach_bit(j, ctx->attachments.used_color_mask) {
+         struct vk_subpass_merging_attachment_ref ref =
+            ctx->attachments.colors[j];
+         const struct vk_subpass *ca_subpass =
+            vk_render_pass_get_subpass(pass, ref.subpass);
+         const struct vk_subpass_attachment *ca =
+            &ca_subpass->color_attachments[ref.index];
+
+         if (ca->attachment == ia->attachment)
+            color_used_mask |= BITFIELD_BIT(j);
+      }
+
+      if (ctx->attachments.depth.subpass != VK_ATTACHMENT_UNUSED) {
+         struct vk_subpass_merging_attachment_ref ref =
+            ctx->attachments.depth;
+         const struct vk_subpass *ca_subpass =
+            vk_render_pass_get_subpass(pass, ref.subpass);
+         const struct vk_subpass_attachment *ca =
+            ca_subpass->depth_stencil_attachment;
+
+         if (ca->attachment == ia->attachment)
+            depth_used = true;
+      }
+
+      if (ctx->attachments.stencil.subpass != VK_ATTACHMENT_UNUSED) {
+         struct vk_subpass_merging_attachment_ref ref =
+            ctx->attachments.stencil;
+         const struct vk_subpass *ca_subpass =
+            vk_render_pass_get_subpass(pass, ref.subpass);
+         const struct vk_subpass_attachment *ca =
+            ca_subpass->depth_stencil_attachment;
+
+         if (ca->attachment == ia->attachment)
+            stencil_used = true;
+      }
+   }
+
+   u_foreach_bit(i, color_used_mask) {
+      ctx->attachments.colors[i].last_access = ctx->last_subpass + 1;
+      ctx->attachments.colors[i].access_count++;
+   }
+
+   if (depth_used) {
+      ctx->attachments.depth.last_access = ctx->last_subpass + 1;
+      ctx->attachments.depth.access_count++;
+   }
+
+   if (stencil_used) {
+      ctx->attachments.stencil.last_access = ctx->last_subpass + 1;
+      ctx->attachments.stencil.access_count++;
+   }
+
+   return true;
+}
+
+void
+vk_render_pass_next_mergeable_range(struct vk_render_pass *pass,
+                                    uint32_t first_subpass,
+                                    uint32_t last_subpass,
+                                    struct vk_subpass_merging_ctx *ctx)
+{
+   init_subpass_merging_ctx(pass, first_subpass, ctx);
+   while (ctx->last_subpass < last_subpass &&
+          can_merge_next_subpass(pass, ctx)) {
+      ctx->last_subpass++;
+   }
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 vk_common_CreateRenderPass2(VkDevice _device,
                             const VkRenderPassCreateInfo2 *pCreateInfo,
@@ -1229,7 +1793,9 @@ vk_common_DestroyRenderPass(VkDevice _device,
 
    for (uint32_t i = 0; i < pass->subpass_count; i++) {
       struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, i);
-      vk_free2(&device->alloc, pAllocator, subpass);
+      if (subpass->merged == VK_SUBPASS_MERGED_FIRST ||
+          subpass->merged == VK_SUBPASS_NOT_MERGED)
+         vk_free2(&device->alloc, pAllocator, subpass);
    }
 
    vk_object_free(device, pAllocator, pass);
@@ -2128,12 +2694,10 @@ subpass_prepare_ds_attachments(
 }
 
 static void
-begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
+begin_subpass_fb_local_barrier(struct vk_command_buffer *cmd_buffer)
 {
    const struct vk_render_pass *pass = cmd_buffer->render_pass;
    const uint32_t subpass_idx = cmd_buffer->subpass_idx;
-   const struct vk_subpass *subpass =
-      vk_render_pass_get_subpass(pass, subpass_idx);
    struct vk_device_dispatch_table *disp =
       &cmd_buffer->base.device->dispatch_table;
    bool needs_mem_barrier = false;
@@ -2145,6 +2709,68 @@ begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
       const struct vk_subpass_dependency *dep = &pass->dependencies[d];
       if (dep->dst_subpass != subpass_idx)
          continue;
+
+      if (!(dep->flags & VK_DEPENDENCY_BY_REGION_BIT))
+         continue;
+
+      needs_mem_barrier = true;
+      mem_barrier.srcStageMask |= dep->src_stage_mask;
+      mem_barrier.srcAccessMask |= dep->src_access_mask;
+      mem_barrier.dstStageMask |= dep->dst_stage_mask;
+      mem_barrier.dstAccessMask |= dep->dst_access_mask;
+   }
+
+   if (needs_mem_barrier) {
+      const VkDependencyInfo dependency_info = {
+         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+         .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
+         .memoryBarrierCount = 1,
+         .pMemoryBarriers = &mem_barrier,
+      };
+      cmd_buffer->runtime_rp_barrier = true;
+      disp->CmdPipelineBarrier2(vk_command_buffer_to_handle(cmd_buffer),
+                                &dependency_info);
+      cmd_buffer->runtime_rp_barrier = false;
+   }
+}
+
+static void
+begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const uint32_t subpass_idx = cmd_buffer->subpass_idx;
+   struct vk_device_dispatch_table *disp =
+      &cmd_buffer->base.device->dispatch_table;
+   uint32_t first_subpass = subpass_idx, last_subpass = subpass_idx;
+   for (; last_subpass < pass->subpass_count; last_subpass++) {
+      struct vk_subpass *future_subpass =
+         vk_render_pass_get_subpass(pass, last_subpass);
+
+      if (future_subpass->merged == VK_SUBPASS_MERGED_LAST ||
+          future_subpass->merged == VK_SUBPASS_NOT_MERGED)
+         break;
+   }
+
+   assert(last_subpass < pass->subpass_count);
+
+   bool needs_mem_barrier = false;
+   VkMemoryBarrier2 mem_barrier = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+   };
+
+   for (uint32_t d = 0; d < pass->dependency_count; d++) {
+      const struct vk_subpass_dependency *dep = &pass->dependencies[d];
+      if (dep->dst_subpass < first_subpass ||
+          dep->dst_subpass > last_subpass)
+         continue;
+
+      /* Skip FB-local deps, those are handled with a pipeline barrier
+       * inside the dynamic render pass. */
+      if (dep->src_subpass > first_subpass &&
+          dep->dst_subpass < last_subpass) {
+         assert(dep->flags & VK_DEPENDENCY_BY_REGION_BIT);
+         continue;
+      }
 
       if (dep->flags & VK_DEPENDENCY_VIEW_LOCAL_BIT) {
          /* From the Vulkan 1.3.204 spec:
@@ -2159,11 +2785,13 @@ begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
          assert(dep->src_subpass < pass->subpass_count);
          const struct vk_subpass *src_subpass =
             vk_render_pass_get_subpass(pass, dep->src_subpass);
+         const struct vk_subpass *dst_subpass =
+            vk_render_pass_get_subpass(pass, dep->dst_subpass);
 
          /* Figure out the set of views in the source subpass affected by this
           * dependency.
           */
-         uint32_t src_dep_view_mask = subpass->view_mask;
+         uint32_t src_dep_view_mask = dst_subpass->view_mask;
          if (dep->view_offset >= 0)
             src_dep_view_mask <<= dep->view_offset;
          else
@@ -2229,47 +2857,63 @@ begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
    }
 
-   struct vk_subpass_attachment_iter att_iter;
    uint32_t max_image_barrier_count = 0;
-   vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
-      if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
-         continue;
 
-      assert(sp_att->attachment < pass->attachment_count);
-      const struct vk_render_pass_attachment *rp_att =
-         &pass->attachments[sp_att->attachment];
+   for (uint32_t s = first_subpass; s < last_subpass; s++) {
+      const struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(pass, s);
+      struct vk_subpass_attachment_iter att_iter;
 
-      max_image_barrier_count += util_bitcount(subpass->view_mask) *
-                                 util_bitcount(rp_att->aspects);
+      vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
+         if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         assert(sp_att->attachment < pass->attachment_count);
+         const struct vk_render_pass_attachment *rp_att =
+            &pass->attachments[sp_att->attachment];
+
+         max_image_barrier_count += util_bitcount(subpass->view_mask) *
+                                    util_bitcount(rp_att->aspects);
+      }
+
+      if (pass->fragment_density_map.attachment != VK_ATTACHMENT_UNUSED)
+         max_image_barrier_count += util_bitcount(subpass->view_mask);
    }
-   if (pass->fragment_density_map.attachment != VK_ATTACHMENT_UNUSED)
-      max_image_barrier_count += util_bitcount(subpass->view_mask);
+
    STACK_ARRAY(VkImageMemoryBarrier2, image_barriers, max_image_barrier_count);
    uint32_t image_barrier_count = 0;
 
-   vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
-      if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
-         continue;
+   for (uint32_t s = first_subpass; s < last_subpass; s++) {
+      const struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(pass, s);
+      struct vk_subpass_attachment_iter att_iter;
 
-      /* If we're using an initial layout, the attachment will already be
-       * marked as transitioned and this will be a no-op.
-       */
-      transition_attachment(cmd_buffer, sp_att->attachment,
-                            subpass->view_mask,
-                            sp_att->layout, sp_att->stencil_layout,
-                            &image_barrier_count,
-                            max_image_barrier_count,
-                            image_barriers);
+      vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
+         if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         /* If we're using an initial layout, the attachment will already be
+          * marked as transitioned and this will be a no-op.
+          */
+         transition_attachment(cmd_buffer, sp_att->attachment,
+                               subpass->view_mask,
+                               sp_att->layout, sp_att->stencil_layout,
+                               &image_barrier_count,
+                               max_image_barrier_count,
+                               image_barriers);
+      }
+
+      if (pass->fragment_density_map.attachment != VK_ATTACHMENT_UNUSED) {
+         transition_attachment(cmd_buffer, pass->fragment_density_map.attachment,
+                               subpass->view_mask,
+                               pass->fragment_density_map.layout,
+                               VK_IMAGE_LAYOUT_UNDEFINED,
+                               &image_barrier_count,
+                               max_image_barrier_count,
+                               image_barriers);
+      }
    }
-   if (pass->fragment_density_map.attachment != VK_ATTACHMENT_UNUSED) {
-      transition_attachment(cmd_buffer, pass->fragment_density_map.attachment,
-                            subpass->view_mask,
-                            pass->fragment_density_map.layout,
-                            VK_IMAGE_LAYOUT_UNDEFINED,
-                            &image_barrier_count,
-                            max_image_barrier_count,
-                            image_barriers);
-   }
+
    assert(image_barrier_count <= max_image_barrier_count);
 
    if (needs_mem_barrier || image_barrier_count > 0) {
@@ -2294,17 +2938,23 @@ begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
 static void
 subpass_load_attachments(struct vk_command_buffer *cmd_buffer)
 {
-   const struct vk_subpass *subpass =
-      vk_render_pass_get_subpass(cmd_buffer->render_pass,
-                                 cmd_buffer->subpass_idx);
-   struct vk_subpass_attachment_iter att_iter;
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
 
-   vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
-      if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
-         continue;
+   for (uint32_t s = cmd_buffer->subpass_idx; s < pass->subpass_count; s++) {
+      const struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, s);
+      struct vk_subpass_attachment_iter att_iter;
 
-      load_attachment(cmd_buffer, sp_att->attachment, subpass->view_mask,
-                      sp_att->layout, sp_att->stencil_layout);
+      vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
+         if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
+            continue;
+
+         load_attachment(cmd_buffer, sp_att->attachment, subpass->view_mask,
+                         sp_att->layout, sp_att->stencil_layout);
+      }
+
+      if (subpass->merged == VK_SUBPASS_NOT_MERGED ||
+          subpass->merged == VK_SUBPASS_MERGED_LAST)
+         break;
    }
 
    /* TODO: Handle preserve attachments
@@ -2400,6 +3050,15 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
    struct vk_device_dispatch_table *disp =
       &cmd_buffer->base.device->dispatch_table;
 
+   /* If we're inside a merged subpass range, all we have to do is emit
+    * barriers for FB-local deps. Other deps for this subpass are handled in
+    * the VK_SUBPASS_MERGED_FIRST subpass. */
+   if (subpass->merged == VK_SUBPASS_MERGED_MID ||
+       subpass->merged == VK_SUBPASS_MERGED_LAST) {
+      begin_subpass_fb_local_barrier(cmd_buffer);
+      return;
+   }
+
    VkRenderingInfo rendering = {
       .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
       .flags = VK_RENDERING_INPUT_ATTACHMENT_NO_CONCURRENT_WRITES_BIT_MESA,
@@ -2477,16 +3136,36 @@ end_subpass(struct vk_command_buffer *cmd_buffer,
    const uint32_t subpass_idx = cmd_buffer->subpass_idx;
    struct vk_device_dispatch_table *disp =
       &cmd_buffer->base.device->dispatch_table;
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(pass, subpass_idx);
+
+   /* If we're merged with other subpasses and we're not the last in the group,
+    * we don't want to stop the dynamic rendering pass. The last subpass in the
+    * group will deal with external dependencies. */
+   if (subpass->merged == VK_SUBPASS_MERGED_FIRST ||
+       subpass->merged == VK_SUBPASS_MERGED_MID)
+      return;
 
    disp->CmdEndRendering(vk_command_buffer_to_handle(cmd_buffer));
 
+   uint32_t dep_src_start = subpass_idx;
+   uint32_t dep_src_end = subpass_idx;
    bool needs_mem_barrier = false;
    VkMemoryBarrier2 mem_barrier = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
    };
+
+   for (dep_src_start = subpass_idx; dep_src_start > 0 ; dep_src_start--) {
+      subpass = vk_render_pass_get_subpass(pass, dep_src_start);
+
+      if (subpass->merged != VK_SUBPASS_MERGED_LAST &&
+          subpass->merged != VK_SUBPASS_MERGED_MID)
+         break;
+   }
+
    for (uint32_t d = 0; d < pass->dependency_count; d++) {
       const struct vk_subpass_dependency *dep = &pass->dependencies[d];
-      if (dep->src_subpass != subpass_idx)
+      if (dep->src_subpass >= dep_src_start && dep->src_subpass <= dep_src_end)
          continue;
 
       if (dep->dst_subpass != VK_SUBPASS_EXTERNAL)
