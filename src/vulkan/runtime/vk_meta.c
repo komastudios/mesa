@@ -458,6 +458,16 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
       info_local.pColorBlendState = &cb_info;
    }
 
+   VkRenderingAttachmentLocationInfo cal_info;
+   if (render->remap_colors) {
+      cal_info = (VkRenderingAttachmentLocationInfo){
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO,
+         .pColorAttachmentLocations = render->color_map,
+         .colorAttachmentCount = render->color_attachment_count,
+      };
+      __vk_append_struct(&info_local, &cal_info);
+   }
+
    VkPipeline pipeline;
    if (meta->use_rect_list_pipeline &&
        info_local.pInputAssemblyState->topology == VK_PRIMITIVE_TOPOLOGY_META_RECT_LIST_MESA) {

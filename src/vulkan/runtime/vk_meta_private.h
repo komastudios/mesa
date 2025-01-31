@@ -49,10 +49,12 @@ vk_meta_rendering_info_copy(struct vk_meta_rendering_info *dst,
    dst->view_mask = src->view_mask;
    dst->samples = src->samples;
    dst->color_attachment_count = src->color_attachment_count;
+   dst->remap_colors = src->remap_colors;
    for (uint32_t a = 0; a < src->color_attachment_count; a++) {
       dst->color_attachment_formats[a] = src->color_attachment_formats[a];
       dst->color_attachment_write_masks[a] =
          src->color_attachment_write_masks[a];
+      dst->color_map[a] = src->color_map[a];
    }
    dst->depth_attachment_format = src->depth_attachment_format;
    dst->stencil_attachment_format = src->stencil_attachment_format;
