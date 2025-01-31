@@ -424,7 +424,7 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
 
    /* Assume rectangle pipelines */
    if (info_local.pInputAssemblyState == NULL)
-   info_local.pInputAssemblyState = &vk_meta_draw_rects_ia_state;
+      info_local.pInputAssemblyState = &vk_meta_draw_rects_ia_state;
 
    if (info_local.pRasterizationState == NULL)
       info_local.pRasterizationState = &default_rs_info;
