@@ -205,11 +205,11 @@ panvk_per_arch(CmdClearAttachments)(VkCommandBuffer commandBuffer,
    assert(cmdbuf->state.gfx.render.view_mask == 0 || PAN_ARCH >= 10);
 
    for (uint32_t i = 0; i < render.color_attachment_count; i++) {
-       render.color_attachment_formats[i] =
-          cmdbuf->state.gfx.render.color_attachments.fmts[i];
-       render.color_attachment_write_masks[i] =
-          VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+      render.color_attachment_formats[i] =
+         cmdbuf->state.gfx.render.color_attachments.fmts[i];
+      render.color_attachment_write_masks[i] =
+         VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
    }
 
    panvk_per_arch(cmd_meta_gfx_start)(cmdbuf, &save);
