@@ -68,7 +68,7 @@ brw_math_function(enum opcode op)
 static struct brw_reg
 normalize_brw_reg_for_encoding(brw_reg *reg)
 {
-   struct brw_reg brw_reg;
+   struct brw_reg brw_reg = {};
 
    switch (reg->file) {
    case ADDRESS:
@@ -777,7 +777,7 @@ brw_generator::generate_code(const cfg_t *cfg, int dispatch_width,
       if (inst->opcode == SHADER_OPCODE_UNDEF)
          continue;
 
-      struct brw_reg src[4], dst;
+      struct brw_reg src[4] = {}, dst = {};
       unsigned int last_insn_offset = p->next_insn_offset;
       bool multiple_instructions_emitted = false;
       tgl_swsb swsb = inst->sched;

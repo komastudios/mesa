@@ -1020,7 +1020,7 @@ brw_inst::remove(bblock_t *block, bool defer_later_block_ip_updates)
    if (exec_list_is_singular(&block->instructions)) {
       this->opcode = BRW_OPCODE_NOP;
       this->resize_sources(0);
-      this->dst = brw_reg();
+      this->dst = {};
       this->size_written = 0;
       return;
    }

@@ -39,7 +39,7 @@ lower_urb_read_logical_send(const brw_builder &bld, brw_inst *inst)
    assert(inst->size_written % REG_SIZE == 0);
    assert(inst->header_size == 0);
 
-   brw_reg payload_sources[2];
+   brw_reg payload_sources[2] = {};
    unsigned header_size = 0;
    payload_sources[header_size++] = inst->src[URB_LOGICAL_SRC_HANDLE];
    if (per_slot_present)
@@ -307,7 +307,7 @@ lower_fb_write_logical_send(const brw_builder &bld, brw_inst *inst,
 
    assert(target != 0 || src0_alpha.file == BAD_FILE);
 
-   brw_reg sources[15];
+   brw_reg sources[15] = {};
    int header_size = 2, payload_header_size;
    unsigned length = 0;
 
@@ -561,7 +561,7 @@ lower_fb_read_logical_send(const brw_builder &bld, brw_inst *inst,
    inst->src[0] = brw_imm_ud(0);
    inst->src[1] = brw_imm_ud(0);
    inst->src[2] = header;
-   inst->src[3] = brw_reg();
+   inst->src[3] = {};
    inst->mlen = length;
    inst->header_size = length;
    inst->sfid = BRW_SFID_RENDER_CACHE;
@@ -777,7 +777,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_inst *inst,
       brw_type_with_size(BRW_TYPE_D, payload_type_bit_size);
    unsigned header_size = 0, length = 0;
    opcode op = inst->opcode;
-   brw_reg sources[1 + MAX_SAMPLER_MESSAGE_SIZE];
+   brw_reg sources[1 + MAX_SAMPLER_MESSAGE_SIZE] = {};
    for (unsigned i = 0; i < ARRAY_SIZE(sources); i++)
       sources[i] = bld.vgrf(payload_type);
 
@@ -1491,7 +1491,7 @@ lower_lsc_memory_logical_send(const brw_builder &bld, brw_inst *inst)
    }
 
    unsigned ex_mlen = 0;
-   brw_reg payload2;
+   brw_reg payload2 = {};
    if (data0.file != BAD_FILE) {
       if (transpose) {
          assert(data1.file == BAD_FILE);
@@ -1499,7 +1499,7 @@ lower_lsc_memory_logical_send(const brw_builder &bld, brw_inst *inst)
          payload2 = data0;
          ex_mlen = DIV_ROUND_UP(components, 8);
       } else {
-         brw_reg data[8];
+         brw_reg data[8] = {};
          unsigned size = 0;
 
          assert(components < 8);
@@ -1693,7 +1693,7 @@ lower_hdc_memory_logical_send(const brw_builder &bld, brw_inst *inst)
    enum lsc_addr_size addr_size = lsc_addr_size_for_type(addr.type);
    unsigned addr_size_B = coord_components * lsc_addr_size_bytes(addr_size);
 
-   brw_reg header;
+   brw_reg header = {};
    brw_builder ubld8 = bld.exec_all().group(8, 0);
    brw_builder ubld1 = ubld8.group(1, 0);
    if (mode == MEMORY_MODE_SCRATCH) {
@@ -1727,11 +1727,11 @@ lower_hdc_memory_logical_send(const brw_builder &bld, brw_inst *inst)
          brw_emit_predicate_on_sample_mask(bld, inst);
    }
 
-   brw_reg payload, payload2;
+   brw_reg payload = {}, payload2 = {};
    unsigned mlen, ex_mlen = 0;
 
    if (!block) {
-      brw_reg data[11];
+      brw_reg data[11] = {};
       unsigned num_sources = 0;
       if (header.file != BAD_FILE)
          data[num_sources++] = header;
@@ -2255,7 +2255,7 @@ lower_btd_logical_send(const brw_builder &bld, brw_inst *inst)
                                         BRW_TYPE_UW));
 
    unsigned ex_mlen = 0;
-   brw_reg payload;
+   brw_reg payload = {};
    if (inst->opcode == SHADER_OPCODE_BTD_SPAWN_LOGICAL) {
       ex_mlen = 2 * (inst->exec_size / 8);
       payload = bld.move_to_vgrf(btd_record, 1);
@@ -2441,7 +2441,7 @@ lower_lsc_memory_fence_and_interlock(const brw_builder &bld, brw_inst *inst)
    inst->src[0] = brw_imm_ud(0);
    inst->src[1] = brw_imm_ud(0);
    inst->src[2] = retype(vec1(header), BRW_TYPE_UD);
-   inst->src[3] = brw_reg();
+   inst->src[3] = {};
    inst->mlen = reg_unit(devinfo);
    inst->ex_mlen = 0;
 
@@ -2517,7 +2517,7 @@ lower_hdc_memory_fence_and_interlock(const brw_builder &bld, brw_inst *inst)
    inst->src[0] = brw_imm_ud(0);
    inst->src[1] = brw_imm_ud(0);
    inst->src[2] = retype(vec1(header), BRW_TYPE_UD);
-   inst->src[3] = brw_reg();
+   inst->src[3] = {};
    inst->mlen = reg_unit(devinfo);
    inst->ex_mlen = 0;
    inst->header_size = 1;
@@ -2746,7 +2746,7 @@ brw_lower_uniform_pull_constant_loads(brw_shader &s)
          setup_surface_descriptors(ubld, inst, desc, surface, surface_handle);
 
          inst->src[2] = header;
-         inst->src[3] = brw_reg(); /* unused for reads */
+         inst->src[3] = {}; /* unused for reads */
 
          s.invalidate_analysis(BRW_DEPENDENCY_INSTRUCTIONS |
                                BRW_DEPENDENCY_VARIABLES);

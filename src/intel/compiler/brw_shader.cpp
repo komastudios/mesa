@@ -54,8 +54,8 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
       VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT | VARYING_BIT_PSIZ | VARYING_BIT_PRIMITIVE_SHADING_RATE;
    const struct intel_vue_map *vue_map = &vue_prog_data->vue_map;
    bool flush;
-   brw_reg sources[8];
-   brw_reg urb_handle;
+   brw_reg sources[8] = {};
+   brw_reg urb_handle = {};
 
    switch (stage) {
    case MESA_SHADER_VERTEX:
@@ -73,7 +73,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
 
    const brw_builder bld = brw_builder(this).at_end();
 
-   brw_reg per_slot_offsets;
+   brw_reg per_slot_offsets = {};
 
    if (stage == MESA_SHADER_GEOMETRY) {
       const struct brw_gs_prog_data *gs_prog_data =
@@ -219,7 +219,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
       if (length == 8 || (length > 0 && slot == last_slot))
          flush = true;
       if (flush) {
-         brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+         brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
 
          srcs[URB_LOGICAL_SRC_HANDLE] = urb_handle;
          srcs[URB_LOGICAL_SRC_PER_SLOT_OFFSETS] = per_slot_offsets;
@@ -270,7 +270,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
 
       bld.exec_all().MOV(uniform_urb_handle, urb_handle);
 
-      brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+      brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
       srcs[URB_LOGICAL_SRC_HANDLE] = uniform_urb_handle;
       srcs[URB_LOGICAL_SRC_DATA] = payload;
       srcs[URB_LOGICAL_SRC_COMPONENTS] = brw_imm_ud(1);
@@ -321,7 +321,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
       bld.exec_all().MOV(offset(payload, bld, 2), brw_imm_ud(0u));
       bld.exec_all().MOV(offset(payload, bld, 3), brw_imm_ud(0u));
 
-      brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+      brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
       srcs[URB_LOGICAL_SRC_HANDLE] = uniform_urb_handle;
       srcs[URB_LOGICAL_SRC_CHANNEL_MASK] = uniform_mask;
       srcs[URB_LOGICAL_SRC_DATA] = payload;
@@ -364,7 +364,7 @@ brw_shader::emit_cs_terminate()
       brw_imm_ud(desc), /* desc */
       brw_imm_ud(0), /* ex_desc */
       payload,       /* payload */
-      brw_reg(),      /* payload2 */
+      {},            /* payload2 */
    };
 
    brw_inst *send = ubld.emit(SHADER_OPCODE_SEND, reg_undef, srcs, 4);
@@ -700,7 +700,7 @@ brw_shader::assign_curb_setup()
             brw_imm_ud(0), /* desc */
             brw_imm_ud(0), /* ex_desc */
             addr,          /* payload */
-            brw_reg(),      /* payload2 */
+            {},            /* payload2 */
          };
 
          brw_reg dest = retype(brw_vec8_grf(payload().num_regs + i, 0),
@@ -790,7 +790,7 @@ brw_shader::assign_curb_setup()
       struct brw_reg mask = brw_vec1_grf(payload().num_regs + mask_param / 8,
                                                               mask_param % 8);
 
-      brw_reg b32;
+      brw_reg b32 = {};
       for (unsigned i = 0; i < 64; i++) {
          if (i % 16 == 0 && (want_zero & BITFIELD64_RANGE(i, 16))) {
             brw_reg shifted = ubld.vgrf(BRW_TYPE_W, 2);

@@ -275,7 +275,7 @@ brw_opt_constant_fold_instruction(const intel_device_info *devinfo, brw_inst *in
           */
          assert(!inst->saturate);
 
-         brw_reg result;
+         brw_reg result = {};
 
          switch (brw_type_size_bytes(inst->src[0].type)) {
          case 2:
@@ -351,7 +351,7 @@ brw_opt_algebraic(brw_shader &s)
          assert(num_imm < 3);
          if (num_imm == 2) {
             uint64_t sum = 0;
-            brw_reg src;
+            brw_reg src = {};
 
             for (unsigned i = 0; i < 3; i++) {
                if (inst->src[i].file == IMM) {

@@ -157,7 +157,7 @@ brw_opt_combine_convergent_txf(brw_shader &s)
          enum brw_reg_type coord_type =
             txfs[curr]->src[TEX_LOGICAL_SRC_COORDINATE].type;
          brw_reg coord = ubld.vgrf(coord_type);
-         brw_reg coord_comps[32];
+         brw_reg coord_comps[32] = {};
 
          for (unsigned i = 0; i < width; i++) {
             /* Our block size might be larger than the number of convergent
@@ -170,7 +170,7 @@ brw_opt_combine_convergent_txf(brw_shader &s)
          }
          ubld1.VEC(coord, coord_comps, width);
 
-         brw_reg srcs[TEX_LOGICAL_NUM_SRCS];
+         brw_reg srcs[TEX_LOGICAL_NUM_SRCS] = {};
          srcs[TEX_LOGICAL_SRC_COORDINATE] = coord;
          srcs[TEX_LOGICAL_SRC_LOD] = txfs[0]->src[TEX_LOGICAL_SRC_LOD];
          srcs[TEX_LOGICAL_SRC_SURFACE] = txfs[0]->src[TEX_LOGICAL_SRC_SURFACE];
@@ -215,7 +215,7 @@ brw_opt_combine_convergent_txf(brw_shader &s)
             const unsigned dest_comps = dest_comps_for_txf(s, txf);
             assert(dest_comps <= 4);
 
-            brw_reg v[4];
+            brw_reg v[4] = {};
             for (unsigned c = 0; c < dest_comps; c++)
                v[c] = component(offset(div, ubld, c), i);
             ibld.VEC(retype(txf->dst, BRW_TYPE_UD), v, dest_comps);

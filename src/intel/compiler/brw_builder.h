@@ -784,7 +784,7 @@ public:
        */
       brw_reg vec4_result = vgrf(BRW_TYPE_F, 4);
 
-      brw_reg srcs[PULL_VARYING_CONSTANT_SRCS];
+      brw_reg srcs[PULL_VARYING_CONSTANT_SRCS] = {};
       srcs[PULL_VARYING_CONSTANT_SRC_SURFACE]        = surface;
       srcs[PULL_VARYING_CONSTANT_SRC_SURFACE_HANDLE] = surface_handle;
       srcs[PULL_VARYING_CONSTANT_SRC_OFFSET]         = total_offset;

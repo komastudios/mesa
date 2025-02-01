@@ -1794,7 +1794,7 @@ try_constant_propagate_def(const struct intel_device_info *devinfo,
 static brw_reg
 find_value_for_offset(brw_inst *def, const brw_reg &src, unsigned src_size)
 {
-   brw_reg val;
+   brw_reg val = {};
 
    switch (def->opcode) {
    case BRW_OPCODE_MOV:

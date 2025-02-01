@@ -194,7 +194,7 @@ brw_fetch_payload_reg(const brw_builder &bld, uint8_t regs[2],
                       brw_reg_type type, unsigned n)
 {
    if (!regs[0])
-      return brw_reg();
+      return {};
 
    if (bld.dispatch_width() > 16) {
       const brw_reg tmp = bld.vgrf(type, n);
@@ -223,7 +223,7 @@ brw_reg
 brw_fetch_barycentric_reg(const brw_builder &bld, uint8_t regs[2])
 {
    if (!regs[0])
-      return brw_reg();
+      return {};
    else if (bld.shader->devinfo->ver >= 20)
       return brw_fetch_payload_reg(bld, regs, BRW_TYPE_F, 2);
 
