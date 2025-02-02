@@ -885,7 +885,8 @@ st_create_common_variant(struct st_context *st,
       return NULL;
    }
 
-   *error = NULL;
+   if (error)
+      *error = NULL;
    return v;
 }
 
@@ -1249,7 +1250,8 @@ st_create_fp_variant(struct st_context *st,
    }
 
    variant->key = *key;
-   *error = NULL;
+   if (error)
+      *error = NULL;
    return variant;
 }
 
