@@ -28,6 +28,7 @@
 #include <sys/mman.h>
 
 #include "anv_private.h"
+#include "anv_slab_bo.h"
 
 #include "common/intel_aux_map.h"
 #include "util/anon_file.h"
@@ -1613,6 +1614,26 @@ anv_device_alloc_bo(struct anv_device *device,
    const uint32_t bo_flags =
          device->kmd_backend->bo_alloc_flags_to_bo_flags(device, alloc_flags);
 
+   struct anv_bo *bo;
+   /* calling in here to avoid the 4k size promotion but we can only do that
+    * because ANV_BO_ALLOC_AUX_CCS is not supported by slab
+    */
+   *bo_out = anv_slab_bo_alloc(device, name, size, alignment, alloc_flags);
+   if (*bo_out) {
+      bo = *bo_out;
+
+      if (alloc_flags & ANV_BO_ALLOC_MAPPED) {
+         VkResult result = anv_device_map_bo(device, bo, 0, size,
+                                             NULL, &bo->map);
+         if (result != VK_SUCCESS)
+            anv_slab_bo_free(device, bo);
+
+         return result;
+      }
+
+      return VK_SUCCESS;
+   }
+
    /* The kernel is going to give us whole pages anyway. */
    size = align64(size, 4096);
 
@@ -1697,7 +1718,7 @@ anv_device_alloc_bo(struct anv_device *device,
    /* If we just got this gem_handle from anv_bo_init_new then we know no one
     * else is touching this BO at the moment so we don't need to lock here.
     */
-   struct anv_bo *bo = anv_device_lookup_bo(device, new_bo.gem_handle);
+   bo = anv_device_lookup_bo(device, new_bo.gem_handle);
    *bo = new_bo;
 
    *bo_out = bo;
@@ -1715,8 +1736,13 @@ anv_device_map_bo(struct anv_device *device,
                   void *placed_addr,
                   void **map_out)
 {
+   struct anv_bo *real = anv_bo_get_real(bo);
+
    assert(!bo->from_host_ptr);
    assert(size > 0);
+
+   if (real != bo)
+      offset += (bo->offset - real->offset);
 
    void *map = device->kmd_backend->gem_mmap(device, bo, offset, size, placed_addr);
    if (unlikely(map == MAP_FAILED))
@@ -2002,6 +2028,7 @@ anv_device_set_bo_tiling(struct anv_device *device,
                          uint32_t row_pitch_B,
                          enum isl_tiling tiling)
 {
+   assert(bo->slab_parent == NULL);
    int ret = anv_gem_set_tiling(device, bo->gem_handle, row_pitch_B,
                                 isl_tiling_to_i915_tiling(tiling));
    if (ret) {
@@ -2037,8 +2064,6 @@ anv_device_release_bo(struct anv_device *device,
    struct anv_bo_cache *cache = &device->bo_cache;
    const bool bo_is_xe_userptr = device->info->kmd_type == INTEL_KMD_TYPE_XE &&
                                  bo->from_host_ptr;
-   assert(bo_is_xe_userptr ||
-          anv_device_lookup_bo(device, bo->gem_handle) == bo);
 
    /* Try to decrement the counter but don't go below one.  If this succeeds
     * then the refcount has been decremented and we are not the last
@@ -2046,6 +2071,14 @@ anv_device_release_bo(struct anv_device *device,
     */
    if (atomic_dec_not_one(&bo->refcount))
       return;
+
+   if (bo->slab_parent) {
+      anv_slab_bo_free(device, bo);
+      return;
+   }
+
+   assert(bo_is_xe_userptr ||
+          anv_device_lookup_bo(device, bo->gem_handle) == bo);
 
    ANV_RMV(bo_destroy, device, bo);
 
