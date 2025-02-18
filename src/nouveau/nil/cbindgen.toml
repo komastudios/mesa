@@ -14,6 +14,7 @@ renaming_overrides_prefixing = true
 # See https://github.com/mozilla/cbindgen/issues/621
 [export.rename]
 "nv_device_info" = "struct nv_device_info"
+"nv_zcull_device_info" = "struct nv_zcull_device_info"
 "pipe_format" = "enum pipe_format"
 "pipe_swizzle" = "enum pipe_swizzle"
 "GOB_DEPTH" = "NIL_GOB_DEPTH"
@@ -34,6 +35,7 @@ renaming_overrides_prefixing = true
 "Tiling" = "nil_tiling"
 "View" = "nil_view"
 "ViewType" = "nil_view_type"
+"ZCull" = "nil_zcull"
 
 # There's just no good solution for this one
 "ImageUsageFlags" = "nil_image_usage_flags"
