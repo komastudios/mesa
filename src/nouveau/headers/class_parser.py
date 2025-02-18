@@ -346,8 +346,10 @@ impl ArrayMthd for ${to_camel(mthd_name)} {
 ## A mere convenience to convert snake_case to CamelCase. Numbers are prefixed
 ## with "_".
 def to_camel(snake_str):
-    result = ''.join(word.title() for word in snake_str.split('_'))
-    return result if not result[0].isdigit() else '_' + result
+    return "".join(
+        word.title() if word == "" or not word[0].isdigit() else "_" + word
+        for word in snake_str.split("_")
+    )
 
 def rs_field_name(name):
     name = name.lower()
