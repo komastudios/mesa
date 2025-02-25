@@ -291,6 +291,7 @@ get_features(const struct panvk_physical_device *device,
       .textureCompressionASTC_LDR = true,
       .fragmentStoresAndAtomics = arch >= 10,
       .shaderStorageImageExtendedFormats = true,
+      .shaderStorageImageReadWithoutFormat = true,
       .shaderUniformBufferArrayDynamicIndexing = true,
       .shaderSampledImageArrayDynamicIndexing = true,
       .shaderStorageBufferArrayDynamicIndexing = true,
@@ -1212,6 +1213,60 @@ format_is_supported(struct panvk_physical_device *physical_device,
    return true;
 }
 
+/* shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat
+ * must be restricted to these formats only. See
+ * https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#formats-without-shader-storage-format
+ */
+static bool
+format_supports_shader_storage_without_format(VkFormat format)
+{
+   switch (format) {
+   case VK_FORMAT_R8G8B8A8_UNORM:
+   case VK_FORMAT_R8G8B8A8_SNORM:
+   case VK_FORMAT_R8G8B8A8_UINT:
+   case VK_FORMAT_R8G8B8A8_SINT:
+   case VK_FORMAT_R32_UINT:
+   case VK_FORMAT_R32_SINT:
+   case VK_FORMAT_R32_SFLOAT:
+   case VK_FORMAT_R32G32_UINT:
+   case VK_FORMAT_R32G32_SINT:
+   case VK_FORMAT_R32G32_SFLOAT:
+   case VK_FORMAT_R32G32B32A32_UINT:
+   case VK_FORMAT_R32G32B32A32_SINT:
+   case VK_FORMAT_R32G32B32A32_SFLOAT:
+   case VK_FORMAT_R16G16B16A16_UINT:
+   case VK_FORMAT_R16G16B16A16_SINT:
+   case VK_FORMAT_R16G16B16A16_SFLOAT:
+   case VK_FORMAT_R16G16_SFLOAT:
+   case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+   case VK_FORMAT_R16_SFLOAT:
+   case VK_FORMAT_R16G16B16A16_UNORM:
+   case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+   case VK_FORMAT_R16G16_UNORM:
+   case VK_FORMAT_R8G8_UNORM:
+   case VK_FORMAT_R16_UNORM:
+   case VK_FORMAT_R8_UNORM:
+   case VK_FORMAT_R16G16B16A16_SNORM:
+   case VK_FORMAT_R16G16_SNORM:
+   case VK_FORMAT_R8G8_SNORM:
+   case VK_FORMAT_R16_SNORM:
+   case VK_FORMAT_R8_SNORM:
+   case VK_FORMAT_R16G16_SINT:
+   case VK_FORMAT_R8G8_SINT:
+   case VK_FORMAT_R16_SINT:
+   case VK_FORMAT_R8_SINT:
+   case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+   case VK_FORMAT_R16G16_UINT:
+   case VK_FORMAT_R8G8_UINT:
+   case VK_FORMAT_R16_UINT:
+   case VK_FORMAT_R8_UINT:
+   case VK_FORMAT_A8_UNORM:
+      return true;
+   default:
+      return false;
+   }
+}
+
 static VkFormatFeatureFlags2
 get_image_plane_format_features(struct panvk_physical_device *physical_device,
                                 VkFormat format)
@@ -1238,11 +1293,19 @@ get_image_plane_format_features(struct panvk_physical_device *physical_device,
 
       features |= VK_FORMAT_FEATURE_2_BLIT_SRC_BIT;
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
+
+      if (format_supports_shader_storage_without_format(format)) {
+         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+      }
    }
 
    if (fmt.bind & PAN_BIND_RENDER_TARGET) {
       features |= VK_FORMAT_FEATURE_2_BLIT_DST_BIT;
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
+
+      if (format_supports_shader_storage_without_format(format)) {
+         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+      }
 
       /* SNORM rendering isn't working yet (nir_lower_blend bugs), disable for
        * now.
@@ -1317,7 +1380,8 @@ get_image_format_features(struct panvk_physical_device *physical_device,
                  VK_FORMAT_FEATURE_2_BLIT_DST_BIT |
                  VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
                  VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT |
-                 VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT);
+                 VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
+                 VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT);
 
    /* This is supported on all YCbCr formats */
    features |=
@@ -1358,8 +1422,13 @@ get_buffer_format_features(struct panvk_physical_device *physical_device,
       features |= VK_FORMAT_FEATURE_2_UNIFORM_TEXEL_BUFFER_BIT;
 
    if ((fmt.bind & PAN_BIND_RENDER_TARGET) &&
-       !util_format_is_depth_and_stencil(pfmt))
+       !util_format_is_depth_and_stencil(pfmt)) {
       features |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
+
+      if (format_supports_shader_storage_without_format(format)) {
+         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+      }
+   }
 
    if (pfmt == PIPE_FORMAT_R32_UINT || pfmt == PIPE_FORMAT_R32_SINT)
       features |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_ATOMIC_BIT;
