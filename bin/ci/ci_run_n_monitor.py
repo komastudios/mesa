@@ -121,6 +121,21 @@ def pretty_wait(sec: int, message: str = "", color: str = "yellow", **yaspin_kwa
         time.sleep(sec)
 
 
+def pretty_pipeline_list(
+    pipeline: gitlab.v4.objects.ProjectPipeline,
+    message: str = "Loading pipeline jobs...",
+    *args,
+    **kwargs,
+) -> list[gitlab.v4.objects.ProjectPipelineJob]:
+    with yaspin(text=message, color="cyan", timer=True).bouncingBar as spinner:
+        jobs = []
+        for job in pipeline.jobs.list(*args, **kwargs):
+            job = cast(gitlab.v4.objects.ProjectPipelineJob, job)
+            jobs.append(job)
+        spinner.cyan.ok(f"Found {len(jobs)} jobs.")
+    return jobs
+
+
 def run_target_job(
     job: gitlab.v4.objects.ProjectPipelineJob,
     enable_job_fn: Callable,
@@ -166,7 +181,12 @@ def collect_stress_status_counter(
     execution_times: dict[str, dict[int, tuple[float, str, str]]],
 ) -> None:
     # When stress test, it is necessary to collect this information before start.
-    for job in pipeline.jobs.list(all=True, include_retried=True):
+    for job in pretty_pipeline_list(
+        pipeline,
+        all=True,
+        include_retried=True,
+        message="[Stress counter] Looking for retried jobs from pipeline...",
+    ):
         if is_target_job(job):
             stress_status_counter[job.name][job.status] += 1
             execution_times[job.name][job.id] = (job_duration(job), job.status, job.web_url)
@@ -211,7 +231,11 @@ def monitor_pipeline(
         deps_failed = []
         to_cancel = []
         jobs_waiting.clear()
-        for job in sorted(pipeline.jobs.list(all=True), key=lambda j: j.name):
+        for job in sorted(
+            pretty_pipeline_list(pipeline, all=True, message="Refreshing pipeline status..."),
+            key=lambda j: j.name,
+        ):
+            job = cast(gitlab.v4.objects.ProjectPipelineJob, job)
             if is_target_job(job):
                 run_target_job(
                     job,
