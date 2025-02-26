@@ -633,7 +633,7 @@ def __job_duration_record(dict_item: tuple) -> str:
 
 
 def link2print(url: str, text: str, text_pad: int = 0) -> str:
-    text_pad = len(text) if text_pad < 1 else text_pad
+    text_pad = max(text_pad, len(text)) + len(URL_END)
     return f"{URL_START}{url}\a{text:{text_pad}}{URL_END}"
 
 
