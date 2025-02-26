@@ -148,12 +148,34 @@ def run_target_job(
     target_statuses[job.name] = job.status
 
 
-def monitor_pipeline(
-    project: gitlab.v4.objects.Project,
-    pipeline: gitlab.v4.objects.ProjectPipeline,
+def is_target_job(
     target_jobs_regex: re.Pattern,
     include_stage_regex: re.Pattern,
     exclude_stage_regex: re.Pattern,
+    job: gitlab.v4.objects.ProjectPipelineJob,
+) -> bool:
+    return target_jobs_regex.fullmatch(job.name) and \
+        include_stage_regex.fullmatch(job.stage) and \
+        not exclude_stage_regex.fullmatch(job.stage)
+
+
+def collect_stress_status_counter(
+    pipeline: gitlab.v4.objects.ProjectPipeline,
+    is_target_job: Callable[[gitlab.v4.objects.ProjectPipelineJob], bool],
+    stress_status_counter: dict[str, dict[str, int]],
+    execution_times: dict[str, dict[int, tuple[float, str, str]]],
+) -> None:
+    # When stress test, it is necessary to collect this information before start.
+    for job in pipeline.jobs.list(all=True, include_retried=True):
+        if is_target_job(job):
+            stress_status_counter[job.name][job.status] += 1
+            execution_times[job.name][job.id] = (job_duration(job), job.status, job.web_url)
+
+
+def monitor_pipeline(
+    project: gitlab.v4.objects.Project,
+    pipeline: gitlab.v4.objects.ProjectPipeline,
+    is_target_job: Callable[[gitlab.v4.objects.ProjectPipelineJob], bool],
     dependencies: set[str],
     stress: int,
 ) -> tuple[Optional[int], Optional[int], Dict[str, Dict[int, Tuple[float, str, str]]]]:
@@ -161,7 +183,7 @@ def monitor_pipeline(
     statuses: dict[str, str] = defaultdict(str)
     target_statuses: dict[str, str] = defaultdict(str)
     stress_status_counter: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    execution_times = defaultdict(lambda: defaultdict(tuple))
+    execution_times: dict[str, dict[int, tuple[float, str, str]]] = defaultdict(lambda: defaultdict(tuple))
     target_id: int = -1
     name_field_pad: int = len(max(dependencies, key=len))+2
     # In a running pipeline, we can skip following job traces that are in these statuses.
@@ -169,15 +191,9 @@ def monitor_pipeline(
 
     # Pre-populate the stress status counter for already completed target jobs.
     if stress:
-        # When stress test, it is necessary to collect this information before start.
-        for job in pipeline.jobs.list(all=True, include_retried=True):
-            if target_jobs_regex.fullmatch(job.name) and \
-               include_stage_regex.fullmatch(job.stage) and \
-               not exclude_stage_regex.fullmatch(job.stage) and \
-               job.status in COMPLETED_STATUSES:
-                stress_status_counter[job.name][job.status] += 1
-                execution_times[job.name][job.id] = (job_duration(job), job.status, job.web_url)
-
+        collect_stress_status_counter(
+            pipeline, is_target_job, stress_status_counter, execution_times
+        )
     # jobs_waiting is a list of job names that are waiting for status update.
     # It occurs when a job that we want to run depends on another job that is not yet finished.
     jobs_waiting = []
@@ -196,10 +212,7 @@ def monitor_pipeline(
         to_cancel = []
         jobs_waiting.clear()
         for job in sorted(pipeline.jobs.list(all=True), key=lambda j: j.name):
-            job = cast(gitlab.v4.objects.ProjectPipelineJob, job)
-            if target_jobs_regex.fullmatch(job.name) and \
-               include_stage_regex.fullmatch(job.stage) and \
-               not exclude_stage_regex.fullmatch(job.stage):
+            if is_target_job(job):
                 run_target_job(
                     job,
                     enable_job_fn,
@@ -694,9 +707,7 @@ def main() -> None:
         target_job_id, ret, exec_t = monitor_pipeline(
             cur_project,
             pipe,
-            target_jobs_regex,
-            include_stage_regex,
-            exclude_stage_regex,
+            partial(is_target_job, target_jobs_regex, include_stage_regex, exclude_stage_regex),
             deps,
             args.stress
         )
