@@ -229,7 +229,7 @@ def monitor_pipeline(
     )
     while True:
         deps_failed = []
-        to_cancel = []
+        to_cancel = set()
         jobs_waiting.clear()
         for job in sorted(
             pretty_pipeline_list(pipeline, all=True, message="Refreshing pipeline status..."),
@@ -261,7 +261,9 @@ def monitor_pipeline(
                 if job.status == "failed":
                     deps_failed.append(job.name)
             else:
-                to_cancel.append(job)
+                to_cancel.add(job)
+            elif job.status == "skipped":
+                to_cancel.discard(job)
 
         cancel_jobs(project, to_cancel)
 
@@ -406,7 +408,7 @@ def cancel_job(
 
 def cancel_jobs(
     project: gitlab.v4.objects.Project,
-    to_cancel: list
+    to_cancel: set[gitlab.v4.objects.ProjectPipelineJob]
 ) -> None:
     """Cancel unwanted GitLab jobs"""
     if not to_cancel:
@@ -418,11 +420,15 @@ def cancel_jobs(
             text=f"Cancelling {len(to_cancel)} jobs...",
             color="yellow",
             timer=True,
-        ).point as spinner:
-            job_names = exe.map(part, to_cancel)
-            job_names = [job_name for job_name in job_names if job_name]
-            if job_names:
-                spinner.yellow.write(f"🗙 Cancelled {len(job_names)} jobs: {', '.join(job_names)}")
+        ).toggle13 as spinner:
+            maybe_cancelled_jobs = exe.map(part, to_cancel)
+            cancelled_jobs = [job for job in maybe_cancelled_jobs if job]
+            to_cancel -= set(cancelled_jobs)
+            if cancelled_jobs:
+                cancelled_job_names = [job.name for job in cancelled_jobs]
+                spinner.yellow.write(
+                    f"Cancelled {len(cancelled_job_names)} jobs: {', '.join(cancelled_job_names)}"
+                )
                 spinner.ok()
 
 
