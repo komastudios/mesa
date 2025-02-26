@@ -391,13 +391,17 @@ def enable_job(
 def cancel_job(
     project: gitlab.v4.objects.Project,
     job: gitlab.v4.objects.ProjectPipelineJob
-) -> None:
+) -> gitlab.v4.objects.ProjectPipelineJob | None:
     """Cancel GitLab job"""
     if job.status not in RUNNING_STATUSES:
-        return
-    pjob = project.jobs.get(job.id, lazy=True)
-    pjob.cancel()
-    print(f"🗙 {job.name}", end=" ")  # U+1F5D9 Cancellation X
+        return job
+    try:
+        pjob = project.jobs.get(job.id, lazy=True)
+        pjob.cancel()
+    except (gitlab.GitlabCancelError, gitlab.GitlabGetError):
+        # If the job failed to cancel, it will be retried in the monitor_pipeline() next iteration
+        return None
+    return job
 
 
 def cancel_jobs(
@@ -410,10 +414,16 @@ def cancel_jobs(
 
     with ThreadPoolExecutor(max_workers=6) as exe:
         part = partial(cancel_job, project)
-        exe.map(part, to_cancel)
-
-    # The cancelled jobs are printed without a newline
-    print_once()
+        with yaspin(
+            text=f"Cancelling {len(to_cancel)} jobs...",
+            color="yellow",
+            timer=True,
+        ).point as spinner:
+            job_names = exe.map(part, to_cancel)
+            job_names = [job_name for job_name in job_names if job_name]
+            if job_names:
+                spinner.yellow.write(f"🗙 Cancelled {len(job_names)} jobs: {', '.join(job_names)}")
+                spinner.ok()
 
 
 def print_log(
