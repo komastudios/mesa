@@ -652,10 +652,12 @@ def main() -> None:
         REV: str = args.rev
 
         if args.pipeline_url:
-            pipe, cur_project = get_gitlab_pipeline_from_url(gl, args.pipeline_url)
-            REV = pipe.sha
+            with yaspin(text="Loading pipeline from URL...", color="white", timer=True).line:
+                pipe, cur_project = get_gitlab_pipeline_from_url(gl, args.pipeline_url)
+                REV = pipe.sha
         else:
-            mesa_project = gl.projects.get("mesa/mesa")
+            with yaspin(text="Loading pipeline from project...", color="white", timer=True).line:
+                mesa_project = gl.projects.get("mesa/mesa")
             projects = [mesa_project]
             if args.mr:
                 REV = mesa_project.mergerequests.get(args.mr).sha
