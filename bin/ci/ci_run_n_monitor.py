@@ -38,6 +38,7 @@ from gitlab_common import (
     wait_for_pipeline,
 )
 from gitlab_gql import GitlabGQL, create_job_needs_dag, filter_dag, print_dag
+from yaspin import yaspin
 
 if TYPE_CHECKING:
     from gitlab_gql import Dag
@@ -107,11 +108,17 @@ def job_duration(job: gitlab.v4.objects.ProjectPipelineJob) -> float:
     return 0.0
 
 
-def pretty_wait(sec: int) -> None:
-    """shows progressbar in dots"""
-    for val in range(sec, 0, -1):
-        print(f"⏲  {val:2d} seconds", end="\r")  # U+23F2 Timer clock
-        time.sleep(1)
+def pretty_wait(sec: int, message: str = "", color: str = "yellow", **yaspin_kwargs) -> None:
+    """
+    Wait for a given number of seconds, with a nice spinner.
+
+    :param sec: Number of seconds to wait
+    :param message: Message to display while waiting
+    :param color: Color of the spinner
+    :param yaspin_kwargs: Additional arguments to pass to yaspin
+    """
+    with yaspin(text=message, color=color, **yaspin_kwargs).simpleDotsScrolling:
+        time.sleep(sec)
 
 
 def run_target_job(
