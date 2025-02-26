@@ -75,7 +75,7 @@ def print_job_status(
     if job.status in {"canceled", "canceling"}:
         return
 
-    if new_status and job.status == "created":
+    if new_status and job.status in {"created", "skipped"}:
         return
 
     job_name_field_pad = len(job.name) if job_name_field_pad < 1 else job_name_field_pad
@@ -260,7 +260,7 @@ def monitor_pipeline(
                     continue
                 if job.status == "failed":
                     deps_failed.append(job.name)
-            else:
+            elif job.status in RUNNING_STATUSES:
                 to_cancel.add(job)
             elif job.status == "skipped":
                 to_cancel.discard(job)
