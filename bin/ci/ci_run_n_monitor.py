@@ -441,15 +441,30 @@ def print_log(
     while True:
         job = project.jobs.get(job_id)
 
+        if job.status in COMPLETED_STATUSES:
+            print(Fore.GREEN + f"Job finished: {job.web_url}" + Style.RESET_ALL)
+            return
+
+        if job.status == "canceled":
+            print(Fore.RED, f"Job canceled: {job.web_url}", Fore.RESET, sep="")
+            return
+
         # GitLab's REST API doesn't offer pagination for logs, so we have to refetch it all
         lines = job.trace().decode().splitlines()
         for line in lines[printed_lines:]:
             print(line)
         printed_lines = len(lines)
 
-        if job.status in COMPLETED_STATUSES:
-            print(Fore.GREEN + f"Job finished: {job.web_url}" + Style.RESET_ALL)
-            return
+        if job.status == "canceling":
+            # Print warning to stderr to avoid mixing with job log
+            print(
+                Fore.RED,
+                f"Warning: Job {job.name} is being canceled: {job.web_url}",
+                Fore.RESET,
+                file=sys.stderr,
+                sep="",
+            )
+
         pretty_wait(REFRESH_WAIT_LOG, "Waiting for job trace to be updated...", color="blue")
 
 
