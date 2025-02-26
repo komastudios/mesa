@@ -241,16 +241,16 @@ def monitor_pipeline(
                     enough = False
 
             if not enough:
-                pretty_wait(REFRESH_WAIT_JOBS)
+                pretty_wait(
+                    REFRESH_WAIT_JOBS,
+                    "[Stress test] Waiting for jobs to complete...",
+                    color="green",
+                )
                 continue
 
         if jobs_waiting:
-            print_once(
-                f"{Fore.YELLOW}Waiting for jobs to update status:",
-                ", ".join(jobs_waiting),
-                Fore.RESET,
-            )
-            pretty_wait(REFRESH_WAIT_JOBS)
+            message = "Waiting for jobs to update status: " + ", ".join(jobs_waiting)
+            pretty_wait(REFRESH_WAIT_JOBS, message)
             continue
 
         if len(target_statuses) == 1 and RUNNING_STATUSES.intersection(
@@ -279,7 +279,10 @@ def monitor_pipeline(
         if skip_follow_statuses.issuperset(target_statuses.values()):
             return None, 0, execution_times
 
-        pretty_wait(REFRESH_WAIT_JOBS)
+        pretty_wait(
+            REFRESH_WAIT_JOBS,
+            "Waiting for target job to become available...",
+        )
 
 
 def enable_job(
@@ -394,7 +397,7 @@ def print_log(
         if job.status in COMPLETED_STATUSES:
             print(Fore.GREEN + f"Job finished: {job.web_url}" + Style.RESET_ALL)
             return
-        pretty_wait(REFRESH_WAIT_LOG)
+        pretty_wait(REFRESH_WAIT_LOG, "Waiting for job trace to be updated...", color="blue")
 
 
 def parse_args() -> argparse.Namespace:
