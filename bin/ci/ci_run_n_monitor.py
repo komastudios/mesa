@@ -669,6 +669,9 @@ def main() -> None:
                 projects.append(get_gitlab_project(gl, args.project))
             (pipe, cur_project) = wait_for_pipeline(projects, REV)
 
+        assert pipe is not None, "Pipeline not found"
+        assert cur_project is not None, "Project not found"
+
         print(f"Revision: {REV}")
         print(f"Pipeline: {pipe.web_url}")
 
