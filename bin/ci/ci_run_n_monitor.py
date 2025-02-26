@@ -556,13 +556,17 @@ def find_dependencies(
         SystemExit: If no target jobs are found in the pipeline.
     """
     gql_instance = GitlabGQL(token=token)
-    dag = create_job_needs_dag(
-        gql_instance, {"projectPath": project_path.path_with_namespace, "iid": iid}
-    )
+    with yaspin(
+        text="Loading full configuration YAML...", color="magenta", timer=True
+    ).line as spinner:
+        dag = create_job_needs_dag(
+            gql_instance, {"projectPath": project_path, "iid": iid}
+        )
+        spinner.ok()
 
     target_dep_dag = filter_dag(dag, target_jobs_regex, include_stage_regex, exclude_stage_regex)
     if not target_dep_dag:
-        print(Fore.RED + "The job(s) were not found in the pipeline." + Fore.RESET)
+        print(Fore.RED, "The job(s) were not found in the pipeline.", Fore.RESET, sep="")
         sys.exit(1)
 
     dependency_jobs = set(chain.from_iterable(d["needs"] for d in target_dep_dag.values()))
@@ -698,7 +702,7 @@ def main() -> None:
             include_stage_regex=include_stage_regex,
             exclude_stage_regex=exclude_stage_regex,
             iid=pipe.iid,
-            project_path=cur_project
+            project_path=cur_project.path_with_namespace
         )
 
         if args.dry_run:
