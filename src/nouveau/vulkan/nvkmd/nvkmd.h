@@ -330,6 +330,10 @@ struct nvkmd_ctx_ops {
    /* Implies flush() */
    VkResult (*sync)(struct nvkmd_ctx *ctx,
                     struct vk_object_base *log_obj);
+
+   VkResult (*bind_zcull_ctxsw)(struct nvkmd_ctx *_ctx,
+                                struct vk_object_base *log_obj,
+                                struct nvkmd_mem *mem);
 };
 
 struct nvkmd_ctx {
@@ -588,6 +592,14 @@ nvkmd_ctx_sync(struct nvkmd_ctx *ctx,
                struct vk_object_base *log_obj)
 {
    return ctx->ops->sync(ctx, log_obj);
+}
+
+static inline VkResult MUST_CHECK
+nvkmd_ctx_bind_zcull_ctxsw(struct nvkmd_ctx *ctx,
+                           struct vk_object_base *log_obj,
+                           struct nvkmd_mem *mem)
+{
+   return ctx->ops->bind_zcull_ctxsw(ctx, log_obj, mem);
 }
 
 #endif /* NVKMD_H */
