@@ -292,6 +292,7 @@ get_features(const struct panvk_physical_device *device,
       .fragmentStoresAndAtomics = arch >= 10,
       .shaderStorageImageExtendedFormats = true,
       .shaderStorageImageReadWithoutFormat = true,
+      .shaderStorageImageWriteWithoutFormat = true,
       .shaderUniformBufferArrayDynamicIndexing = true,
       .shaderSampledImageArrayDynamicIndexing = true,
       .shaderStorageBufferArrayDynamicIndexing = true,
@@ -1295,7 +1296,8 @@ get_image_plane_format_features(struct panvk_physical_device *physical_device,
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
 
       if (format_supports_shader_storage_without_format(format)) {
-         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+                     VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
       }
    }
 
@@ -1304,7 +1306,8 @@ get_image_plane_format_features(struct panvk_physical_device *physical_device,
       features |= VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
 
       if (format_supports_shader_storage_without_format(format)) {
-         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+                     VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
       }
 
       /* SNORM rendering isn't working yet (nir_lower_blend bugs), disable for
@@ -1381,7 +1384,8 @@ get_image_format_features(struct panvk_physical_device *physical_device,
                  VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT |
                  VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BLEND_BIT |
                  VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT |
-                 VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT);
+                 VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+                 VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT);
 
    /* This is supported on all YCbCr formats */
    features |=
@@ -1426,7 +1430,8 @@ get_buffer_format_features(struct panvk_physical_device *physical_device,
       features |= VK_FORMAT_FEATURE_2_STORAGE_TEXEL_BUFFER_BIT;
 
       if (format_supports_shader_storage_without_format(format)) {
-         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT;
+         features |= VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT |
+                     VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT;
       }
    }
 

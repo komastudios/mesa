@@ -19,3 +19,4 @@ VK_EXT_device_memory_report on RADV
 shaderStorageImageExtendedFormats on panvk
 VK_KHR_format_feature_flags2 on panvk
 shaderStorageImageReadWithoutFormat on panvk
+shaderStorageImageWriteWithoutFormat on panvk
