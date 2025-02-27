@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
+use syn::spanned::Spanned;
 use syn::*;
 
-enum RawArg {
+use crate::display_op::{DisplayTokens, ParseTokens};
+
+pub enum RawArg {
     Ident(Ident),
     Literal(LitStr),
     AssignLit(Ident, LitStr),
@@ -40,55 +43,6 @@ impl syn::parse::Parse for RawArg {
             RawArg::AssignType(ident, rhs)
         };
         Ok(val)
-    }
-}
-
-#[derive(Default, Debug)]
-struct ModifierArgs {
-    name: Option<LitStr>,
-    name_false: Option<LitStr>,
-    def: Option<Type>,
-}
-
-impl syn::parse::Parse for ModifierArgs {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let mut args = ModifierArgs::default();
-
-        if input.is_empty() {
-            return Ok(args);
-        }
-
-        let unhandled_err = |span: Span| {
-            return Err(syn::Error::new(span, "Unhandled argument"))
-                as syn::Result<()>;
-        };
-
-        for arg in
-            syn::punctuated::Punctuated::<RawArg, Token![,]>::parse_terminated(
-                input,
-            )?
-            .iter()
-        {
-            match arg {
-                RawArg::Literal(name) => {
-                    if args.name.is_none() {
-                        args.name = Some(name.clone());
-                    } else if args.name_false.is_none() {
-                        args.name_false = Some(name.clone())
-                    } else {
-                        unhandled_err(name.span())?;
-                    }
-                }
-                RawArg::AssignType(d, def) if d == "def" => {
-                    args.def
-                        .map_or(Ok(()), |_| return unhandled_err(d.span()))?;
-                    args.def = Some(def.clone())
-                }
-                x => unhandled_err(x.span())?,
-            }
-        }
-
-        Ok(args)
     }
 }
 
@@ -177,164 +131,95 @@ impl syn::parse::Parse for DisplayArgs {
 }
 
 #[derive(Debug)]
-pub enum ModifierType {
-    BoolMod {
-        name: LitStr,
-        name_false: Option<LitStr>,
-    },
-    EnumMod {
-        def: Option<Type>,
-    },
-}
-
-pub struct Modifier {
-    pub ident: Ident,
-    pub array_len: usize,
-    pub ty: ModifierType,
-}
-
-impl Modifier {
-    fn parse_field(field: &Field) -> syn::Result<Option<Self>> {
-        let Some(attr) = field
-            .attrs
-            .iter()
-            .filter(|x| x.path().is_ident("modifier"))
-            .next()
-        else {
-            return Ok(None);
-        };
-
-        let is_type_bool = |ty: &Type| {
-            matches!(ty, Type::Path(TypePath {
-            qself: None,
-            path
-        }) if path.is_ident("bool"))
-        };
-
-        let (array_len, is_bool) = match &field.ty {
-            Type::Array(TypeArray {
-                elem,
-                len:
-                    Expr::Lit(ExprLit {
-                        lit: Lit::Int(len), ..
-                    }),
-                ..
-            }) => (len.base10_parse()?, is_type_bool(&elem)),
-            ty => (0usize, is_type_bool(&ty)),
-        };
-
-        let args: ModifierArgs = match attr.meta {
-            Meta::Path(_) => ModifierArgs::default(),
-            _ => attr.parse_args()?,
-        };
-        let ident = field.ident.as_ref().unwrap().clone();
-        let mod_ty = if is_bool {
-            ModifierType::BoolMod {
-                name_false: args.name_false,
-                name: args.name.unwrap_or_else(|| {
-                    let ident = field.ident.as_ref().unwrap();
-                    let fname = ident.to_string();
-                    LitStr::new(&format!(".{fname}"), ident.span())
-                }),
-            }
-        } else {
-            ModifierType::EnumMod {
-                def: args.def.clone(),
-            }
-        };
-        Ok(Some(Modifier {
-            ident,
-            array_len,
-            ty: mod_ty,
-        }))
-    }
-
-    pub fn parse_all(data: &DataStruct) -> syn::Result<Vec<Self>> {
-        data.fields
-            .iter()
-            .filter_map(|x| Self::parse_field(x).transpose())
-            .collect()
-    }
-}
-
-impl quote::ToTokens for Modifier {
-    fn to_tokens(&self, tokens: &mut TokenStream2) {
-        let Modifier {
-            ident,
-            array_len,
-            ty,
-        } = self;
-
-        let generate_no_arr = |ident| match ty {
-            ModifierType::BoolMod {
-                name,
-                name_false: None,
-            } => {
-                quote! {
-                    if #ident {
-                        write!(f, #name)?;
-                    }
-                }
-            }
-            ModifierType::BoolMod {
-                name,
-                name_false: Some(name_false),
-            } => {
-                quote! {
-                    write!(f, "{}", if #ident { #name } else { #name_false })?;
-                }
-            }
-            ModifierType::EnumMod { def: None } => {
-                quote! {
-                    write!(f, "{}", #ident)?;
-                }
-            }
-            ModifierType::EnumMod { def: Some(def) } => {
-                quote! {
-                    if #ident != #def {
-                        write!(f, "{}", #ident)?;
-                    }
-                }
-            }
-        };
-        let t = match array_len {
-            0 => generate_no_arr(quote! { self.#ident }),
-            n => (0..*n)
-                .map(|i| generate_no_arr(quote! { self.#ident[#i]}))
-                .collect(),
-        };
-        t.to_tokens(tokens);
-    }
-}
-
-#[derive(Debug)]
 pub enum OpSourceFormat {
     Plain,
-    Addr { offset: Option<LitStr> },
-    Custom(LitStr),
+    Addr {
+        offset: Option<Ident>,
+    },
+    Custom {
+        fmt: LitStr,
+        prefix: String,
+        postfix: String,
+    },
 }
 
-/// Tracks sources of instr as Src and Target
+fn analyze_custom_format(
+    fmt: &str,
+) -> std::result::Result<(String, String), &'static str> {
+    // Format should be "A{}B"
+    // where: A and C can contain {{ or }} (escaped brackets)
+
+    // Equivalent to the regex "[^{]\{\}" compiled by hand
+    // (don't want to include the whole re just for this)
+    let mut state: u8 = 0u8;
+    let mut param_idx = None;
+    for (idx, c) in fmt.char_indices() {
+        state = match (state, c) {
+            (0, '{') => 0,
+            (0, _) => 1,
+            (1, '{') => 2,
+            (1, _) => 1,
+            (2, '}') => {
+                // found a capture!
+                if param_idx.is_some() {
+                    return Err("Must only have one parameter print!");
+                }
+                // '{}' starts at last char, but we are sure it's
+                // ASCII (1 byte)
+                param_idx = Some(idx - 1);
+                1
+            }
+            (2, '{') => 0,
+            (2, _) => 1,
+            _ => unreachable!("We only have 3 states"),
+        };
+    }
+    let Some(param_idx) = param_idx else {
+        return Err("no parameter print, please add {} in your format str");
+    };
+    let prefix = fmt[..param_idx].replace("{{", "{").replace("}}", "}");
+    let postfix = fmt[(param_idx + 2)..].replace("{{", "{").replace("}}", "}");
+    Ok((prefix, postfix))
+}
+
+pub fn fn_tuple_to_arr(len: usize) -> TokenStream2 {
+    let alphabet = "abcdefghijklmnopqrstuxyvz";
+    assert!(alphabet.len() >= len, "too many values to convert");
+    let names1 = alphabet[0..len].chars().map(|x| format_ident!("{}", x));
+    let names2 = names1.clone();
+
+    quote! {
+        |(#(#names1,)*)| [#(#names2,)*]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SrcDstType {
+    Src,
+    Dst,
+    Label,
+}
+
+/// Tracks sources or dests of instructions as Src, Dst and Target
 /// Sources can also be arrays of static size
 #[derive(Debug)]
-pub struct OpSource {
+pub struct OpSourceDest {
     pub ident: Ident,
+    pub ty: SrcDstType,
+    /// Src index from the start
+    /// for arrays it's the index of the first element
+    pub src_type: Option<Ident>,
     pub array_len: usize,
     pub prefix: String,
     pub format: OpSourceFormat,
 }
 
-impl OpSource {
-    fn parse_field(field: &Field) -> syn::Result<Option<Self>> {
-        let is_type_src = |x: &Type| match x {
-            Type::Path(TypePath { qself: None, path })
-                if path.is_ident("Src") || path.is_ident("Label") =>
-            {
-                true
-            }
-            _ => false,
-        };
-        let array_len: usize = match &field.ty {
+impl OpSourceDest {
+    fn parse_field(
+        field: &Field,
+        match_src: bool,
+    ) -> syn::Result<Option<Self>> {
+        let (array_len, ty) = match &field.ty {
             Type::Array(TypeArray {
                 elem,
                 len:
@@ -342,10 +227,20 @@ impl OpSource {
                         lit: Lit::Int(len), ..
                     }),
                 ..
-            }) if is_type_src(&elem) => len.base10_parse()?,
-            x if is_type_src(&x) => 0,
+            }) => (len.base10_parse()?, elem.as_ref()),
+            x => (0usize, x),
+        };
+        let ty = match ty {
+            Type::Path(TypePath { qself: None, path }) => path,
             _ => return Ok(None),
         };
+        let ty = match ty {
+            x if match_src && x.is_ident("Src") => SrcDstType::Src,
+            x if match_src && x.is_ident("Label") => SrcDstType::Label,
+            x if !match_src && x.is_ident("Dst") => SrcDstType::Dst,
+            _ => return Ok(None),
+        };
+
         let attr = field
             .attrs
             .iter()
@@ -356,62 +251,99 @@ impl OpSource {
             None => OpSourceFormatArgs::default(),
         };
 
-        let prefix =
+        let src_type = if ty == SrcDstType::Src {
+            field
+                .attrs
+                .iter()
+                .filter(|x| x.path().is_ident("src_type"))
+                .next()
+                .map(|x| x.parse_args::<Ident>())
+                .transpose()?
+        } else {
+            None
+        };
+
+        let src_prefix =
             args.prefix.map(|x| x.value()).unwrap_or_else(|| "".into());
         let format = if args.addr {
+            if !matches!(ty, SrcDstType::Src) {
+                return Err(syn::Error::new(
+                    field.span(),
+                    "Only Src types can have addr formatting!",
+                ));
+            }
             OpSourceFormat::Addr {
-                offset: args.addr_offset,
+                offset: args
+                    .addr_offset
+                    .map(|x| Ident::new(&x.value(), x.span())),
             }
         } else if let Some(fmt) = args.custom_format {
-            OpSourceFormat::Custom(fmt)
+            let (prefix, postfix) = analyze_custom_format(&fmt.value())
+                .map_err(|x| syn::Error::new(fmt.span(), x))?;
+            OpSourceFormat::Custom {
+                fmt,
+                prefix,
+                postfix,
+            }
         } else {
             OpSourceFormat::Plain
         };
 
-        Ok(Some(OpSource {
+        Ok(Some(OpSourceDest {
             ident: field.ident.as_ref().unwrap().clone(),
+            ty,
+            src_type,
             array_len,
-            prefix,
+            prefix: src_prefix,
             format,
         }))
     }
 
-    pub fn parse_all(data: &DataStruct) -> syn::Result<Vec<Self>> {
+    fn parse_all(data: &DataStruct, match_src: bool) -> syn::Result<Vec<Self>> {
         data.fields
             .iter()
-            .filter_map(|x| Self::parse_field(x).transpose())
+            .filter_map(|x| Self::parse_field(x, match_src).transpose())
             .collect()
+    }
+
+    pub fn parse_all_srcs(data: &DataStruct) -> syn::Result<Vec<Self>> {
+        Self::parse_all(data, true)
+    }
+
+    pub fn parse_all_dsts(data: &DataStruct) -> syn::Result<Vec<Self>> {
+        Self::parse_all(data, false)
     }
 }
 
-impl quote::ToTokens for OpSource {
+impl quote::ToTokens for DisplayTokens<&OpSourceDest> {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
-        let ident = &self.ident;
+        let ident = &self.0.ident;
+        assert!(self.0.ty != SrcDstType::Dst, "Cannot format Dsts");
+
         let generate_no_arr = |ident| {
-            let arg = match &self.format {
-                OpSourceFormat::Plain | OpSourceFormat::Custom(_) => {
+            let arg = match &self.0.format {
+                OpSourceFormat::Plain | OpSourceFormat::Custom { .. } => {
                     quote!( #ident )
                 }
                 OpSourceFormat::Addr { offset: None } => {
-                    quote! { FmtAddr { src: &#ident, off: 0 } }
+                    quote! { FmtAddr { src: #ident, off: 0 } }
                 }
                 OpSourceFormat::Addr { offset: Some(off) } => {
-                    let off = Ident::new(&off.value(), off.span());
-                    quote! { FmtAddr { src: &#ident, off: self.#off}}
+                    quote! { FmtAddr { src: #ident, off: self.#off}}
                 }
             };
-            let fstr = match &self.format {
-                OpSourceFormat::Custom(fmt) => {
-                    format!(" {}{}", self.prefix, fmt.value())
+            let fstr = match &self.0.format {
+                OpSourceFormat::Custom { fmt, .. } => {
+                    format!(" {}{}", self.0.prefix, fmt.value())
                 }
-                _ => format!(" {}{{}}", self.prefix),
+                _ => format!(" {}{{}}", self.0.prefix),
             };
             quote! {
                 write!(f, #fstr, #arg)?;
             }
         };
 
-        let t = match self.array_len {
+        let t = match self.0.array_len {
             0 => generate_no_arr(quote! { self.#ident }),
             n => (0..n)
                 .map(|i| generate_no_arr(quote! { self.#ident[#i] }))
@@ -420,4 +352,107 @@ impl quote::ToTokens for OpSource {
 
         t.to_tokens(tokens);
     }
+}
+
+impl quote::ToTokens for ParseTokens<&OpSourceDest> {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        let src_type = &self.0.src_type;
+
+        let plain_parser = |ty: SrcDstType| match ty {
+            SrcDstType::Src => {
+                let src_type = src_type.clone().unwrap_or_else(|| {
+                    Ident::new("DEFAULT", Span::call_site())
+                });
+                quote! {
+                    Src::parse(SrcType::#src_type)
+                }
+            }
+            SrcDstType::Dst => quote! {
+                Dst::parse
+            },
+            SrcDstType::Label => quote! {
+                Label::parse
+            },
+        };
+
+        let generate_no_arr = || {
+            let arg = match (&self.0.ty, &self.0.format) {
+                (ty, OpSourceFormat::Plain) => plain_parser(*ty),
+                (
+                    ty,
+                    OpSourceFormat::Custom {
+                        prefix, postfix, ..
+                    },
+                ) => {
+                    let plain = plain_parser(*ty);
+                    quote! { crate::parser::delimited(
+                        tag(#prefix),
+                        #plain,
+                        tag(#postfix)
+                    )}
+                }
+                (SrcDstType::Src, OpSourceFormat::Addr { .. }) => {
+                    quote! { FmtAddr::parse }
+                }
+                (ty, fmt) => {
+                    panic!("Unknown type-format combination! {ty:?} {fmt:?}")
+                }
+            };
+            let prefix = match self.0.prefix.as_str() {
+                "" => quote! {
+                    crate::parser::whitespace
+                },
+                prefix => quote! {
+                    crate::parser::whitespace.and(crate::parser::tag(#prefix))
+                },
+            };
+            quote! {
+                crate::parser::preceded(#prefix, #arg)
+            }
+        };
+
+        let t = match self.0.array_len {
+            0 => generate_no_arr(),
+            n => {
+                let parsers = (0..n).map(|_| generate_no_arr());
+                let map_fn = fn_tuple_to_arr(n);
+
+                quote! {
+                    (#(#parsers,)*).and().map(#map_fn)
+                }
+            }
+        };
+
+        t.to_tokens(tokens);
+    }
+}
+
+pub fn sources_to_destructure_tokens(
+    srcs: &[OpSourceDest],
+) -> (TokenStream2, TokenStream2) {
+    let destructure_tokens = srcs.iter().map(|x| {
+        let ident = &x.ident;
+        match &x.format {
+            OpSourceFormat::Addr { offset: None } => {
+                quote! { FmtAddr { src: #ident, ..  } }
+            }
+            OpSourceFormat::Addr {
+                offset: Some(off_field),
+            } => quote! { FmtAddr { src: #ident, off: #off_field  } },
+            _ => quote! { #ident },
+        }
+    });
+    let list_tokens = srcs.iter().map(|x| {
+        let ident = &x.ident;
+        match &x.format {
+            OpSourceFormat::Addr {
+                offset: Some(off_field),
+            } => quote! { #ident, #off_field, },
+            _ => quote! { #ident, },
+        }
+    });
+    (
+        quote! { (#(#destructure_tokens,)*) },
+        quote! { #(#list_tokens)* },
+    )
 }

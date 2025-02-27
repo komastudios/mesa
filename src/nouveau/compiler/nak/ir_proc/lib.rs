@@ -14,6 +14,8 @@ use syn::*;
 
 mod args;
 mod display_op;
+mod mod_display;
+mod modifier;
 
 #[proc_macro_derive(SrcsAsSlice, attributes(src_type))]
 pub fn derive_srcs_as_slice(input: TokenStream) -> TokenStream {
@@ -58,4 +60,40 @@ pub fn derive_from_variants(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(DisplayOp, attributes(display_op, modifier, op_format))]
 pub fn derive_display_op(input: TokenStream) -> TokenStream {
     display_op::derive_display_op(input)
+}
+
+#[proc_macro_derive(ModifierDisplay, attributes(modifier))]
+pub fn derive_modifier_display(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input);
+    match mod_display::derive_modifier(input, true, false) {
+        Ok(x) => x.into(),
+        Err(e) => e.into_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(ModifierParse, attributes(modifier))]
+pub fn derive_modifier_parse(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input);
+    match mod_display::derive_modifier(input, false, true) {
+        Ok(x) => x.into(),
+        Err(e) => e.into_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(EnumDisplay, attributes(format))]
+pub fn derive_enum_display(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input);
+    match mod_display::derive_enum(input, true, false) {
+        Ok(x) => x.into(),
+        Err(e) => e.into_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(EnumParse, attributes(format))]
+pub fn derive_enum_parse(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input);
+    match mod_display::derive_enum(input, false, true) {
+        Ok(x) => x.into(),
+        Err(e) => e.into_compile_error().into(),
+    }
 }
