@@ -435,36 +435,31 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
 
       fbinfo->rts[i].preload = true;
 
-      if (fbinfo->rts[i].clear) {
-         if (render_info) {
-            const VkRenderingAttachmentInfo *att =
-               &render_info->pColorAttachments[i];
+      if (fbinfo->rts[i].clear && render_info) {
+         const VkRenderingAttachmentInfo *att =
+            &render_info->pColorAttachments[i];
 
-            clear_atts[clear_att_count++] = (VkClearAttachment){
-               .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-               .colorAttachment = i,
-               .clearValue = att->clearValue,
-            };
-         }
-         fbinfo->rts[i].clear = false;
+         clear_atts[clear_att_count++] = (VkClearAttachment){
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .colorAttachment = i,
+            .clearValue = att->clearValue,
+         };
       }
+      fbinfo->rts[i].clear = false;
    }
 
    if (fbinfo->zs.view.zs) {
       fbinfo->zs.preload.z = true;
 
-      if (fbinfo->zs.clear.z) {
-         if (render_info) {
-            const VkRenderingAttachmentInfo *att =
-               render_info->pDepthAttachment;
+      if (fbinfo->zs.clear.z && render_info) {
+         const VkRenderingAttachmentInfo *att = render_info->pDepthAttachment;
 
-            clear_atts[clear_att_count++] = (VkClearAttachment){
-               .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-               .clearValue = att->clearValue,
-            };
-         }
-         fbinfo->zs.clear.z = false;
+         clear_atts[clear_att_count++] = (VkClearAttachment){
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .clearValue = att->clearValue,
+         };
       }
+      fbinfo->zs.clear.z = false;
    }
 
    if (fbinfo->zs.view.s ||
@@ -472,19 +467,15 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
         util_format_is_depth_and_stencil(fbinfo->zs.view.zs->format))) {
       fbinfo->zs.preload.s = true;
 
-      if (fbinfo->zs.clear.s) {
-         if (render_info) {
-            const VkRenderingAttachmentInfo *att =
-               render_info->pStencilAttachment;
+      if (fbinfo->zs.clear.s && render_info) {
+         const VkRenderingAttachmentInfo *att = render_info->pStencilAttachment;
 
-            clear_atts[clear_att_count++] = (VkClearAttachment){
-               .aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT,
-               .clearValue = att->clearValue,
-            };
-         }
-
-         fbinfo->zs.clear.s = false;
+         clear_atts[clear_att_count++] = (VkClearAttachment){
+            .aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT,
+            .clearValue = att->clearValue,
+         };
       }
+      fbinfo->zs.clear.s = false;
    }
 
 #if PAN_ARCH >= 10
@@ -508,7 +499,9 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
                                        &dep_info);
 #endif
 
-   if (clear_att_count && render_info) {
+   if (clear_att_count) {
+      assert(render_info);
+
       VkClearRect clear_rect = {
          .rect = render_info->renderArea,
          .baseArrayLayer = 0,
