@@ -399,6 +399,21 @@ typedef enum {
     * A manually encoded opcode
     */
    OPC_META_RAW = _OPC(OPC_META, 7),
+
+   /* 64b values occupy 2 registers but we receive them as a single component
+    * value from NIR. Since there are many places that assume a 1:1 relationship
+    * between components and instructions, this can be error prone as we have to
+    * remember to double the number of components whenever a 64b values is
+    * involved.
+    *
+    * The meta:64b instruction that can be used to wrap the two components in a
+    * single instruction. It really is just a wrapper: whenever it is used
+    * anywhere (which can only be by a collect), its sources are simply
+    * flattened into the use. So even though it has a dst for technical reasons,
+    * it is never actually used anywhere. This means these instructions are only
+    * used during code emission and will disappear after the first DCE pass.
+    */
+   OPC_META_64B = _OPC(OPC_META, 8),
 } opc_t;
 /* clang-format on */
 

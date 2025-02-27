@@ -246,6 +246,12 @@ ir3_get_src_maybe_shared(struct ir3_context *ctx, nir_src *src)
 static struct ir3_instruction *
 get_shared(struct ir3_builder *build, struct ir3_instruction *src, bool shared)
 {
+   /* meta:64b doesn't actually write anything so rewrap its sources. */
+   if (src->opc == OPC_META_64B) {
+      return ir3_64b(build, get_shared(build, ir3_64b_get_lo(src), shared),
+                     get_shared(build, ir3_64b_get_hi(src), shared));
+   }
+
    if (!!(src->dsts[0]->flags & IR3_REG_SHARED) != shared) {
       struct ir3_instruction *mov =
          ir3_MOV(build, src,
@@ -319,7 +325,18 @@ ir3_create_collect(struct ir3_builder *build,
    if (arrsz == 0)
       return NULL;
 
-   if (arrsz == 1)
+   unsigned srcs_count = 0;
+
+   for (unsigned i = 0; i < arrsz; i++) {
+      if (arr[i] && arr[i]->opc == OPC_META_64B) {
+         /* meta:64b will be flattened into the collect. */
+         srcs_count += 2;
+      } else {
+         srcs_count++;
+      }
+   }
+
+   if (srcs_count == 1)
       return arr[0];
 
    int non_undef_src = -1;
@@ -335,11 +352,21 @@ ir3_create_collect(struct ir3_builder *build,
     */
    assert(non_undef_src != -1);
    unsigned flags = dest_flags(arr[non_undef_src]);
+   struct ir3_instruction *srcs[srcs_count];
 
-   collect = ir3_build_instr(build, OPC_META_COLLECT, 1, arrsz);
+   for (unsigned i = 0, s = 0; i < arrsz; i++) {
+      if (arr[i] && arr[i]->opc == OPC_META_64B) {
+         srcs[s++] = ir3_64b_get_lo(arr[i]);
+         srcs[s++] = ir3_64b_get_hi(arr[i]);
+      } else {
+         srcs[s++] = arr[i];
+      }
+   }
+
+   collect = ir3_build_instr(build, OPC_META_COLLECT, 1, srcs_count);
    __ssa_dst(collect)->flags |= flags;
-   for (unsigned i = 0; i < arrsz; i++) {
-      struct ir3_instruction *elem = arr[i];
+   for (unsigned i = 0; i < srcs_count; i++) {
+      struct ir3_instruction *elem = srcs[i];
 
       /* Since arrays are pre-colored in RA, we can't assume that
        * things will end up in the right place.  (Ie. if a collect
@@ -378,7 +405,7 @@ ir3_create_collect(struct ir3_builder *build,
       }
    }
 
-   collect->dsts[0]->wrmask = MASK(arrsz);
+   collect->dsts[0]->wrmask = MASK(srcs_count);
 
    return collect;
 }
