@@ -1010,6 +1010,7 @@ vk_color_blend_state_init(struct vk_color_blend_state *cb,
 
    assert(cb_info->attachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
    cb->attachment_count = cb_info->attachmentCount;
+   printf("%s:%i att_count %d\n", __func__, __LINE__, cb->attachment_count);
    /* pAttachments is ignored if any of these is not set */
    bool full_dynamic = IS_DYNAMIC(CB_BLEND_ENABLES) && IS_DYNAMIC(CB_BLEND_EQUATIONS) && IS_DYNAMIC(CB_WRITE_MASKS);
    for (uint32_t a = 0; a < cb_info->attachmentCount; a++) {
@@ -1068,6 +1069,7 @@ vk_input_attachment_location_state_init(struct vk_input_attachment_location_stat
                                         const BITSET_WORD *dynamic,
                                         const VkRenderingInputAttachmentIndexInfoKHR *ial_info)
 {
+   printf("%s:%i\n", __func__, __LINE__);
    *ial = (struct vk_input_attachment_location_state) {
       .color_map = { 0, 1, 2, 3, 4, 5, 6, 7 },
       .color_attachment_count = MESA_VK_COLOR_ATTACHMENT_COUNT_UNKNOWN,
@@ -1077,6 +1079,7 @@ vk_input_attachment_location_state_init(struct vk_input_attachment_location_stat
    if (!ial_info)
       return;
 
+   printf("%s:%i\n", __func__, __LINE__);
    for (uint32_t a = 0; a < MIN2(ial_info->colorAttachmentCount,
                                  MESA_VK_MAX_COLOR_ATTACHMENTS); a++) {
       if (!ial_info->pColorAttachmentInputIndices) {
@@ -1101,18 +1104,21 @@ vk_color_attachment_location_state_init(struct vk_color_attachment_location_stat
                                         const BITSET_WORD *dynamic,
                                         const VkRenderingAttachmentLocationInfoKHR *cal_info)
 {
+   printf("%s:%i\n", __func__, __LINE__);
    *cal = (struct vk_color_attachment_location_state) {
       .color_map = { 0, 1, 2, 3, 4, 5, 6, 7 },
    };
    if (!cal_info)
       return;
 
+   printf("%s:%i\n", __func__, __LINE__);
    for (uint32_t a = 0; a < MIN2(cal_info->colorAttachmentCount,
                                  MESA_VK_MAX_COLOR_ATTACHMENTS); a++) {
       cal->color_map[a] =
          cal_info->pColorAttachmentLocations == NULL ? a :
          cal_info->pColorAttachmentLocations[a] == VK_ATTACHMENT_UNUSED ?
          MESA_VK_ATTACHMENT_UNUSED : cal_info->pColorAttachmentLocations[a];
+      printf("%s:%i shader att %d -> col %d\n", __func__, __LINE__, cal->color_map[a], a);
    }
 }
 
@@ -3152,6 +3158,7 @@ vk_cmd_set_rendering_attachment_locations(struct vk_command_buffer *cmd,
 {
    struct vk_dynamic_graphics_state *dyn = &cmd->dynamic_graphics_state;
 
+   printf("%s:%i\n", __func__, __LINE__);
    assert(info->colorAttachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
    for (uint32_t i = 0; i < info->colorAttachmentCount; i++) {
       const uint8_t val =
@@ -3169,6 +3176,7 @@ vk_common_CmdSetRenderingAttachmentLocationsKHR(
 {
    VK_FROM_HANDLE(vk_command_buffer, cmd, commandBuffer);
 
+   printf("%s:%i\n", __func__, __LINE__);
    vk_cmd_set_rendering_attachment_locations(cmd, pLocationInfo);
 }
 

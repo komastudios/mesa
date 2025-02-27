@@ -1051,6 +1051,7 @@ panvk_queue_submit_ioctl(struct panvk_queue_submit *submit)
    };
 
    ret = drmIoctl(dev->vk.drm_fd, DRM_IOCTL_PANTHOR_GROUP_SUBMIT, &gsubmit);
+   assert(!ret);
    if (ret)
       return vk_queue_set_lost(&queue->vk, "GROUP_SUBMIT: %m");
 

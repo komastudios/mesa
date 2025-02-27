@@ -134,6 +134,7 @@ get_clear_pipeline(struct vk_device *device,
       return VK_SUCCESS;
    }
 
+   printf("render->remap_colors %d\n", key->render.remap_colors);
    const VkPipelineShaderStageNirCreateInfoMESA fs_nir_info = {
       .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_NIR_CREATE_INFO_MESA,
       .nir = build_clear_shader(key),
@@ -207,6 +208,7 @@ vk_meta_clear_attachments(struct vk_command_buffer *cmd,
    const struct vk_device_dispatch_table *disp = &device->dispatch_table;
    VkResult result;
 
+   printf("render->remap_colors %d\n", render->remap_colors);
    struct vk_meta_clear_key key;
    memset(&key, 0, sizeof(key));
    key.key_type = VK_META_OBJECT_KEY_CLEAR;

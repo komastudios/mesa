@@ -409,6 +409,7 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
    VkDevice _device = vk_device_to_handle(device);
    VkResult result;
 
+   printf("render->remap_colors %d\n", render->remap_colors);
    VkGraphicsPipelineCreateInfo info_local = *info;
 
    /* Add in the rendering info */
@@ -471,10 +472,12 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
    VkPipeline pipeline;
    if (meta->use_rect_list_pipeline &&
        info_local.pInputAssemblyState->topology == VK_PRIMITIVE_TOPOLOGY_META_RECT_LIST_MESA) {
+      printf("%s:%i\n", __func__, __LINE__);
       result = create_rect_list_pipeline(device, meta,
                                          &info_local,
                                          &pipeline);
    } else {
+      printf("%s:%i\n", __func__, __LINE__);
       result = disp->CreateGraphicsPipelines(_device, meta->pipeline_cache,
                                              1, &info_local,
                                              NULL, &pipeline);

@@ -12,6 +12,8 @@
 
 #include "pan_desc.h"
 
+#include "vk_render_pass.h"
+
 static void
 render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
                                   const VkRenderingAttachmentInfo *att,

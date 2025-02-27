@@ -457,6 +457,8 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
       panvk_cmd_alloc_desc_array(cmdbuf, bd_count, BLEND);
    struct mali_blend_packed *bds = ptr.cpu;
 
+   printf("%s:%i att_count %d\n", __func__, __LINE__, cb->attachment_count);
+
    if (bd_count && !ptr.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
@@ -1557,6 +1559,7 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
          cs_move32_to(b, cs_sr_reg32(b, IDVS, DCD0), dcd0.opaque[0]);
    }
 
+   printf("%s:%i\n", __func__, __LINE__);
    if (dcd1_dirty) {
       struct mali_dcd_flags_1_packed dcd1;
       pan_pack(&dcd1, DCD_FLAGS_1, cfg) {
@@ -1569,6 +1572,7 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
                (fs->info.outputs_written >> FRAG_RESULT_DATA0) &
                cmdbuf->state.gfx.render.bound_attachments;
          }
+         printf("%s:%i sample_mask %x RT_mask %x\n", __func__, __LINE__, cfg.sample_mask, cfg.render_target_mask);
       }
 
       cs_update_vt_ctx(b)
@@ -1671,6 +1675,7 @@ get_tiler_flags_override(struct panvk_draw_info *draw)
 static VkResult
 prepare_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
 {
+   printf("%s:%i\n", __func__, __LINE__);
    const struct panvk_shader *vs = cmdbuf->state.gfx.vs.shader;
    const struct panvk_shader *fs = get_fs(cmdbuf);
    struct panvk_descriptor_state *desc_state = &cmdbuf->state.gfx.desc_state;
@@ -1873,6 +1878,7 @@ panvk_per_arch(CmdDraw)(VkCommandBuffer commandBuffer, uint32_t vertexCount,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
 
+   printf("%s:%i\n", __func__, __LINE__);
    if (instanceCount == 0 || vertexCount == 0)
       return;
 
@@ -2158,6 +2164,7 @@ panvk_per_arch(CmdBeginRendering)(VkCommandBuffer commandBuffer,
    struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
    bool resuming = pRenderingInfo->flags & VK_RENDERING_RESUMING_BIT;
 
+   printf("%s:%i\n", __func__, __LINE__);
    panvk_per_arch(cmd_init_render_state)(cmdbuf, pRenderingInfo);
 
    /* If we're not resuming, the FBD should be NULL. */
@@ -2632,4 +2639,5 @@ panvk_per_arch(CmdEndRendering)(VkCommandBuffer commandBuffer)
    /* If we're not suspending, we need to resolve attachments. */
    if (!suspending)
       panvk_per_arch(cmd_resolve_attachments)(cmdbuf);
+   printf("%s:%i\n", __func__, __LINE__);
 }

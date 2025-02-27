@@ -84,8 +84,17 @@ is_mergeable(const struct vk_render_pass *pass,
     * subpass range by evicting the last subpass. */
    if (!fits_in_tile_buf(pass, ctx)) {
       *last_subpass = ctx->last_subpass - 1;
+      printf("%s:%i subpass %d:%d does not fit in tile buf\n", __func__,
+             __LINE__, ctx->first_subpass, ctx->last_subpass);
       return false;
    }
+
+   /*
+   if (ctx->last_subpass > ctx->first_subpass + 1) {
+      *last_subpass = ctx->first_subpass + 1;
+      return false;
+   }
+   */
 
    *first_subpass = ctx->last_subpass + 1;
    *last_subpass = pass->subpass_count - 1;
@@ -101,7 +110,8 @@ merge_subpasses(struct vk_render_pass *pass, const VkAllocationCallbacks *alloc)
    do {
       vk_render_pass_next_mergeable_range(pass, first_sp, last_sp, &ctx);
 
-      if (is_mergeable(pass, &ctx, &first_sp, &last_sp)) {
+      if (is_mergeable(pass, &ctx, &first_sp, &last_sp) && 1) {
+         printf("%s:%i merge subpass %d:%d\n", __func__, __LINE__, ctx.first_subpass, ctx.last_subpass);
          VkResult result = vk_render_pass_merge_subpasses(pass, alloc, &ctx);
          if (result != VK_SUCCESS)
             return result;
@@ -123,6 +133,7 @@ panvk_per_arch(CreateRenderPass2)(VkDevice device,
    if (result != VK_SUCCESS)
       return result;
 
+//   return result;
    VK_FROM_HANDLE(vk_render_pass, pass, *pRenderPass);
 
    result = merge_subpasses(pass, pAllocator);
