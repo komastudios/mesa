@@ -66,6 +66,7 @@ struct panvk_rendering_state {
    struct {
       struct pan_fb_info info;
       bool crc_valid[MAX_RTS];
+      bool provoking_vertex_set;
 
 #if PAN_ARCH <= 7
       uint32_t bo_count;

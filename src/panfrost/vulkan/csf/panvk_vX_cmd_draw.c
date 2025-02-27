@@ -1164,9 +1164,10 @@ set_provoking_vertex_mode(struct panvk_cmd_buffer *cmdbuf)
    /* If this is not the first draw, first_provoking_vertex should match
     * the one from the previous draws. Unfortunately, we can't check it
     * when the render pass is inherited. */
-   assert(!cmdbuf->state.gfx.render.fbds.gpu || inherits_render_ctx(cmdbuf) ||
+   assert(!cmdbuf->state.gfx.render.fb.provoking_vertex_set ||
           fbinfo->first_provoking_vertex == first_provoking_vertex);
 
+   cmdbuf->state.gfx.render.fb.provoking_vertex_set = true;
    fbinfo->first_provoking_vertex = first_provoking_vertex;
 }
 
