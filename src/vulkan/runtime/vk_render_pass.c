@@ -1797,29 +1797,18 @@ load_attachment(struct vk_command_buffer *cmd_buffer,
 }
 
 static void
-begin_subpass(struct vk_command_buffer *cmd_buffer,
-              const VkSubpassBeginInfo *begin_info)
+subpass_prepare_color_attachments(
+   struct vk_command_buffer *cmd_buffer,
+   VkRenderingInfo *rendering,
+   VkRenderingAttachmentInfo *color_attachments,
+   VkRenderingAttachmentInitialLayoutInfoMESA *color_attachment_initial_layouts)
 {
    const struct vk_render_pass *pass = cmd_buffer->render_pass;
-   const struct vk_framebuffer *framebuffer = cmd_buffer->framebuffer;
-   const uint32_t subpass_idx = cmd_buffer->subpass_idx;
-   assert(subpass_idx < pass->subpass_count);
    const struct vk_subpass *subpass =
-      vk_render_pass_get_subpass(pass, subpass_idx);
-   struct vk_device_dispatch_table *disp =
-      &cmd_buffer->base.device->dispatch_table;
+      vk_render_pass_get_subpass(pass, cmd_buffer->subpass_idx);
 
-   /* First, we figure out all our attachments and attempt to handle image
-    * layout transitions and load ops as part of vkCmdBeginRendering if we
-    * can.  For any we can't handle this way, we'll need explicit barriers
-    * or quick vkCmdBegin/EndRendering to do the load op.
-    */
-
-   STACK_ARRAY(VkRenderingAttachmentInfo, color_attachments,
-               subpass->color_count);
-   STACK_ARRAY(VkRenderingAttachmentInitialLayoutInfoMESA,
-               color_attachment_initial_layouts,
-               subpass->color_count);
+   rendering->colorAttachmentCount = subpass->color_count;
+   rendering->pColorAttachments = color_attachments;
 
    for (uint32_t i = 0; i < subpass->color_count; i++) {
       const struct vk_subpass_attachment *sp_att =
@@ -1921,19 +1910,38 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
             color_attachment->resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
       }
    }
+}
 
-   VkRenderingAttachmentInfo depth_attachment = {
+static void
+subpass_prepare_ds_attachments(
+   struct vk_command_buffer *cmd_buffer,
+   VkRenderingInfo *rendering,
+   VkRenderingAttachmentInfo *depth_attachment,
+   VkRenderingAttachmentInfo *stencil_attachment,
+   VkRenderingAttachmentInitialLayoutInfoMESA *depth_initial_layout,
+   VkRenderingAttachmentInitialLayoutInfoMESA *stencil_initial_layout,
+   VkSampleLocationsInfoEXT *new_sample_locations)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const uint32_t subpass_idx = cmd_buffer->subpass_idx;
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(pass, subpass_idx);
+
+   *depth_attachment = (VkRenderingAttachmentInfo){
       .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
    };
-   VkRenderingAttachmentInfo stencil_attachment = {
+   *stencil_attachment = (VkRenderingAttachmentInfo){
       .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
    };
-   VkRenderingAttachmentInitialLayoutInfoMESA depth_initial_layout = {
+   *depth_initial_layout = (VkRenderingAttachmentInitialLayoutInfoMESA){
       .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INITIAL_LAYOUT_INFO_MESA,
    };
-   VkRenderingAttachmentInitialLayoutInfoMESA stencil_initial_layout = {
+   *stencil_initial_layout = (VkRenderingAttachmentInitialLayoutInfoMESA){
       .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INITIAL_LAYOUT_INFO_MESA,
    };
+
+   rendering->pDepthAttachment = depth_attachment;
+   rendering->pStencilAttachment = stencil_attachment;
 
    const VkSampleLocationsInfoEXT *sample_locations = NULL;
    if (subpass->depth_stencil_attachment != NULL) {
@@ -1948,23 +1956,23 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
 
       assert(sp_att->aspects == rp_att->aspects);
       if (rp_att->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
-         depth_attachment.imageView =
+         depth_attachment->imageView =
             vk_image_view_to_handle(att_state->image_view);
-         depth_attachment.imageLayout = sp_att->layout;
+         depth_attachment->imageLayout = sp_att->layout;
       }
 
       if (rp_att->aspects & VK_IMAGE_ASPECT_STENCIL_BIT) {
-         stencil_attachment.imageView =
+         stencil_attachment->imageView =
             vk_image_view_to_handle(att_state->image_view);
-         stencil_attachment.imageLayout = sp_att->stencil_layout;
+         stencil_attachment->imageLayout = sp_att->stencil_layout;
       }
 
       if (!(subpass->view_mask & att_state->views_loaded)) {
          /* None of these views have been used before */
-         depth_attachment.loadOp = rp_att->load_op;
-         depth_attachment.clearValue = att_state->clear_value;
-         stencil_attachment.loadOp = rp_att->stencil_load_op;
-         stencil_attachment.clearValue = att_state->clear_value;
+         depth_attachment->loadOp = rp_att->load_op;
+         depth_attachment->clearValue = att_state->clear_value;
+         stencil_attachment->loadOp = rp_att->stencil_load_op;
+         stencil_attachment->clearValue = att_state->clear_value;
          att_state->views_loaded |= subpass->view_mask;
 
          VkImageLayout initial_layout, initial_stencil_layout;
@@ -1975,18 +1983,18 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
                                                &initial_stencil_layout)) {
             if ((rp_att->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) &&
                 sp_att->layout != initial_layout) {
-               assert(depth_attachment.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
-               depth_initial_layout.initialLayout = initial_layout;
-               __vk_append_struct(&depth_attachment,
-                                  &depth_initial_layout);
+               assert(depth_attachment->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+               depth_initial_layout->initialLayout = initial_layout;
+               __vk_append_struct(depth_attachment,
+                                  depth_initial_layout);
             }
 
             if ((rp_att->aspects & VK_IMAGE_ASPECT_STENCIL_BIT) &&
                 sp_att->stencil_layout != initial_stencil_layout) {
-               assert(stencil_attachment.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
-               stencil_initial_layout.initialLayout = initial_stencil_layout;
-               __vk_append_struct(&stencil_attachment,
-                                  &stencil_initial_layout);
+               assert(stencil_attachment->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+               stencil_initial_layout->initialLayout = initial_stencil_layout;
+               __vk_append_struct(stencil_attachment,
+                                  stencil_initial_layout);
             }
 
             vk_command_buffer_set_attachment_layout(cmd_buffer,
@@ -1998,14 +2006,14 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
          /* We've seen at least one of the views of this attachment before so
           * we need to LOAD_OP_LOAD.
           */
-         depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-         stencil_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+         depth_attachment->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+         stencil_attachment->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
       }
 
       if (!(subpass->view_mask & ~sp_att->last_subpass)) {
          /* This is the last subpass for every view */
-         depth_attachment.storeOp = rp_att->store_op;
-         stencil_attachment.storeOp = rp_att->stencil_store_op;
+         depth_attachment->storeOp = rp_att->store_op;
+         stencil_attachment->storeOp = rp_att->stencil_store_op;
       } else {
          /* For at least one of our views, this isn't the last subpass
           *
@@ -2014,8 +2022,8 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
           * some places where it may have wanted STORE_OP_NONE but that should
           * be harmless.
           */
-         depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-         stencil_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+         depth_attachment->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+         stencil_attachment->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
       }
 
       /* From the Vulkan 1.3.212 spec:
@@ -2084,11 +2092,11 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
          VkImageAspectFlags resolved_aspects = 0;
 
          if (depth_resolve_mode != VK_RESOLVE_MODE_NONE) {
-            depth_attachment.resolveMode = depth_resolve_mode;
+            depth_attachment->resolveMode = depth_resolve_mode;
             if (sp_att->resolve) {
-               depth_attachment.resolveImageView =
+               depth_attachment->resolveImageView =
                   vk_image_view_to_handle(res_att_state->image_view);
-               depth_attachment.resolveImageLayout =
+               depth_attachment->resolveImageLayout =
                   sp_att->resolve->layout;
             }
 
@@ -2096,11 +2104,11 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
          }
 
          if (stencil_resolve_mode != VK_RESOLVE_MODE_NONE) {
-            stencil_attachment.resolveMode = stencil_resolve_mode;
+            stencil_attachment->resolveMode = stencil_resolve_mode;
             if (sp_att->resolve) {
-               stencil_attachment.resolveImageView =
+               stencil_attachment->resolveImageView =
                   vk_image_view_to_handle(res_att_state->image_view);
-               stencil_attachment.resolveImageLayout =
+               stencil_attachment->resolveImageLayout =
                   sp_att->resolve->stencil_layout;
             }
 
@@ -2117,15 +2125,26 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
       }
    }
 
-   /* Next, handle any barriers we need.  This may include a general
-    * VkMemoryBarrier for subpass dependencies and it may include some
-    * number of VkImageMemoryBarriers for layout transitions.
-    */
+   if (sample_locations) {
+      *new_sample_locations = *sample_locations;
+      __vk_append_struct(rendering, new_sample_locations);
+   }
+}
 
+static void
+begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const uint32_t subpass_idx = cmd_buffer->subpass_idx;
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(pass, subpass_idx);
+   struct vk_device_dispatch_table *disp =
+      &cmd_buffer->base.device->dispatch_table;
    bool needs_mem_barrier = false;
    VkMemoryBarrier2 mem_barrier = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
    };
+
    for (uint32_t d = 0; d < pass->dependency_count; d++) {
       const struct vk_subpass_dependency *dep = &pass->dependencies[d];
       if (dep->dst_subpass != subpass_idx)
@@ -2275,10 +2294,15 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
    }
 
    STACK_ARRAY_FINISH(image_barriers);
+}
 
-   /* Next, handle any VK_ATTACHMENT_LOAD_OP_CLEAR that we couldn't handle
-    * directly by emitting a quick vkCmdBegin/EndRendering to do the load.
-    */
+static void
+subpass_load_attachments(struct vk_command_buffer *cmd_buffer)
+{
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(cmd_buffer->render_pass,
+                                 cmd_buffer->subpass_idx);
+
    for (uint32_t a = 0; a < subpass->attachment_count; a++) {
       const struct vk_subpass_attachment *sp_att = &subpass->attachments[a];
       if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
@@ -2295,6 +2319,91 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
     * a tiling GPU, we should really hook up preserve attachments and use them
     * to determine when we can use LOAD/STORE_OP_DONT_CARE between subpasses.
     */
+}
+
+static void
+subpass_prepare_fsr_attachment(
+   struct vk_command_buffer *cmd_buffer,
+   VkRenderingInfo *rendering,
+   VkRenderingFragmentShadingRateAttachmentInfoKHR *fsr_attachment)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(pass, cmd_buffer->subpass_idx);
+
+   if (!subpass->fragment_shading_rate_attachment)
+      return;
+
+   const struct vk_subpass_attachment *sp_att =
+      subpass->fragment_shading_rate_attachment;
+
+   assert(sp_att->attachment < pass->attachment_count);
+   struct vk_attachment_state *att_state =
+      &cmd_buffer->attachments[sp_att->attachment];
+
+   /* Fragment shading rate attachments have no loadOp (it's implicitly
+    * LOAD_OP_LOAD) so we need to ensure the load op happens.
+    */
+   load_attachment(cmd_buffer, sp_att->attachment, subpass->view_mask,
+                   sp_att->layout, sp_att->stencil_layout);
+
+   *fsr_attachment = (VkRenderingFragmentShadingRateAttachmentInfoKHR) {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR,
+      .imageView = vk_image_view_to_handle(att_state->image_view),
+      .imageLayout = sp_att->layout,
+      .shadingRateAttachmentTexelSize =
+         subpass->fragment_shading_rate_attachment_texel_size,
+   };
+   __vk_append_struct(rendering, fsr_attachment);
+}
+
+static void
+subpass_prepare_fdm_attachment(
+   struct vk_command_buffer *cmd_buffer,
+   VkRenderingInfo *rendering,
+   VkRenderingFragmentDensityMapAttachmentInfoEXT *fdm_attachment)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+
+   if (pass->fragment_density_map.attachment == VK_ATTACHMENT_UNUSED)
+      return;
+
+   assert(pass->fragment_density_map.attachment < pass->attachment_count);
+   struct vk_attachment_state *att_state =
+      &cmd_buffer->attachments[pass->fragment_density_map.attachment];
+
+   /* From the Vulkan 1.3.125 spec:
+    *
+    *    VUID-VkRenderPassFragmentDensityMapCreateInfoEXT-fragmentDensityMapAttachment-02550
+    *
+    *    If fragmentDensityMapAttachment is not VK_ATTACHMENT_UNUSED,
+    *    fragmentDensityMapAttachment must reference an attachment with a
+    *    loadOp equal to VK_ATTACHMENT_LOAD_OP_LOAD or
+    *    VK_ATTACHMENT_LOAD_OP_DONT_CARE
+    *
+    * This means we don't have to implement the load op.
+    */
+
+   *fdm_attachment = (VkRenderingFragmentDensityMapAttachmentInfoEXT) {
+      .sType = VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT,
+      .imageView = vk_image_view_to_handle(att_state->image_view),
+      .imageLayout = pass->fragment_density_map.layout,
+   };
+   __vk_append_struct(rendering, fdm_attachment);
+}
+
+static void
+begin_subpass(struct vk_command_buffer *cmd_buffer,
+              const VkSubpassBeginInfo *begin_info)
+{
+   const struct vk_render_pass *pass = cmd_buffer->render_pass;
+   const struct vk_framebuffer *framebuffer = cmd_buffer->framebuffer;
+   const uint32_t subpass_idx = cmd_buffer->subpass_idx;
+   assert(subpass_idx < pass->subpass_count);
+   const struct vk_subpass *subpass =
+      vk_render_pass_get_subpass(pass, subpass_idx);
+   struct vk_device_dispatch_table *disp =
+      &cmd_buffer->base.device->dispatch_table;
 
    VkRenderingInfo rendering = {
       .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
@@ -2302,71 +2411,55 @@ begin_subpass(struct vk_command_buffer *cmd_buffer,
       .renderArea = cmd_buffer->render_area,
       .layerCount = pass->is_multiview ? 1 : framebuffer->layers,
       .viewMask = pass->is_multiview ? subpass->view_mask : 0,
-      .colorAttachmentCount = subpass->color_count,
-      .pColorAttachments = color_attachments,
-      .pDepthAttachment = &depth_attachment,
-      .pStencilAttachment = &stencil_attachment,
    };
+
+   /* First, we figure out all our attachments and attempt to handle image
+    * layout transitions and load ops as part of vkCmdBeginRendering if we
+    * can.  For any we can't handle this way, we'll need explicit barriers
+    * or quick vkCmdBegin/EndRendering to do the load op.
+    */
+
+   STACK_ARRAY(VkRenderingAttachmentInfo, color_attachments,
+               subpass->color_count);
+   STACK_ARRAY(VkRenderingAttachmentInitialLayoutInfoMESA,
+               color_attachment_initial_layouts,
+               subpass->color_count);
+
+   subpass_prepare_color_attachments(cmd_buffer, &rendering, color_attachments,
+                                     color_attachment_initial_layouts);
+
+   VkRenderingAttachmentInfo depth_attachment;
+   VkRenderingAttachmentInfo stencil_attachment;
+   VkRenderingAttachmentInitialLayoutInfoMESA depth_initial_layout;
+   VkRenderingAttachmentInitialLayoutInfoMESA stencil_initial_layout;
+   VkSampleLocationsInfoEXT sample_locations;
+
+   subpass_prepare_ds_attachments(cmd_buffer, &rendering,
+                                  &depth_attachment,
+                                  &stencil_attachment,
+                                  &depth_initial_layout,
+                                  &stencil_initial_layout,
+                                  &sample_locations);
+
+   /* Next, handle any barriers we need.  This may include a general
+    * VkMemoryBarrier for subpass dependencies and it may include some
+    * number of VkImageMemoryBarriers for layout transitions.
+    */
+   begin_subpass_barriers(cmd_buffer);
+
+   /* Next, handle any VK_ATTACHMENT_LOAD_OP_CLEAR that we couldn't handle
+    * directly by emitting a quick vkCmdBegin/EndRendering to do the load.
+    */
+   subpass_load_attachments(cmd_buffer);
 
    if (subpass->legacy_dithering_enabled)
       rendering.flags |= VK_RENDERING_ENABLE_LEGACY_DITHERING_BIT_EXT;
 
    VkRenderingFragmentShadingRateAttachmentInfoKHR fsr_attachment;
-   if (subpass->fragment_shading_rate_attachment) {
-      const struct vk_subpass_attachment *sp_att =
-         subpass->fragment_shading_rate_attachment;
-
-      assert(sp_att->attachment < pass->attachment_count);
-      struct vk_attachment_state *att_state =
-         &cmd_buffer->attachments[sp_att->attachment];
-
-      /* Fragment shading rate attachments have no loadOp (it's implicitly
-       * LOAD_OP_LOAD) so we need to ensure the load op happens.
-       */
-      load_attachment(cmd_buffer, sp_att->attachment, subpass->view_mask,
-                      sp_att->layout, sp_att->stencil_layout);
-
-      fsr_attachment = (VkRenderingFragmentShadingRateAttachmentInfoKHR) {
-         .sType = VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR,
-         .imageView = vk_image_view_to_handle(att_state->image_view),
-         .imageLayout = sp_att->layout,
-         .shadingRateAttachmentTexelSize =
-            subpass->fragment_shading_rate_attachment_texel_size,
-      };
-      __vk_append_struct(&rendering, &fsr_attachment);
-   }
+   subpass_prepare_fsr_attachment(cmd_buffer, &rendering, &fsr_attachment);
 
    VkRenderingFragmentDensityMapAttachmentInfoEXT fdm_attachment;
-   if (pass->fragment_density_map.attachment != VK_ATTACHMENT_UNUSED) {
-      assert(pass->fragment_density_map.attachment < pass->attachment_count);
-      struct vk_attachment_state *att_state =
-         &cmd_buffer->attachments[pass->fragment_density_map.attachment];
-
-      /* From the Vulkan 1.3.125 spec:
-       *
-       *    VUID-VkRenderPassFragmentDensityMapCreateInfoEXT-fragmentDensityMapAttachment-02550
-       *
-       *    If fragmentDensityMapAttachment is not VK_ATTACHMENT_UNUSED,
-       *    fragmentDensityMapAttachment must reference an attachment with a
-       *    loadOp equal to VK_ATTACHMENT_LOAD_OP_LOAD or
-       *    VK_ATTACHMENT_LOAD_OP_DONT_CARE
-       *
-       * This means we don't have to implement the load op.
-       */
-
-      fdm_attachment = (VkRenderingFragmentDensityMapAttachmentInfoEXT) {
-         .sType = VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT,
-         .imageView = vk_image_view_to_handle(att_state->image_view),
-         .imageLayout = pass->fragment_density_map.layout,
-      };
-      __vk_append_struct(&rendering, &fdm_attachment);
-   }
-
-   VkSampleLocationsInfoEXT sample_locations_tmp;
-   if (sample_locations) {
-      sample_locations_tmp = *sample_locations;
-      __vk_append_struct(&rendering, &sample_locations_tmp);
-   }
+   subpass_prepare_fdm_attachment(cmd_buffer, &rendering, &fdm_attachment);
 
    /* Append this one last because it lives in the subpass and we don't want
     * to be changed by appending other structures later.
