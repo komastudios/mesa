@@ -4617,7 +4617,8 @@ static void si_bind_vertex_elements(struct pipe_context *ctx, void *state)
       v = sctx->no_velems_state;
 
    sctx->vertex_elements = v;
-   sctx->num_vertex_elements = v->count;
+   sctx->num_vertex_elements = sctx->shader.vs.cso &&
+                               sctx->shader.vs.cso->info.base.vs.blit_sgprs_amd ? 0 : v->count;
    sctx->vertex_buffers_dirty = sctx->num_vertex_elements > 0;
    sctx->vertex_buffer_unaligned = 0;
 #ifndef NDEBUG
