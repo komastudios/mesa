@@ -2564,7 +2564,7 @@ void
 panvk_per_arch(cmd_flush_draws)(struct panvk_cmd_buffer *cmdbuf)
 {
    /* If there was no draw queued, we don't need to force a preload. */
-   if (cmdbuf->state.gfx.render.fbds.gpu || inherits_render_ctx(cmdbuf)) {
+   if (cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)) {
       flush_tiling(cmdbuf);
       issue_fragment_jobs(cmdbuf);
       memset(&cmdbuf->state.gfx.render.fbds, 0,
