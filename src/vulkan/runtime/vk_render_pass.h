@@ -113,12 +113,6 @@ struct vk_subpass_attachment {
 
 /***/
 struct vk_subpass {
-   /** Count of all attachments referenced by this subpass */
-   uint32_t attachment_count;
-
-   /** Array of all attachments referenced by this subpass */
-   struct vk_subpass_attachment *attachments;
-
    /** VkSubpassDescription2::inputAttachmentCount */
    uint32_t input_count;
 
@@ -218,6 +212,93 @@ struct vk_subpass {
    /** True if legacy dithering is enabled for this subpass. */
    bool legacy_dithering_enabled;
 };
+
+enum vk_subpass_attachment_type {
+   VK_SUBPASS_INPUT_ATTACHMENT = 0,
+   VK_SUBPASS_COLOR_ATTACHMENT,
+   VK_SUBPASS_COLOR_RESOLVE_ATTACHMENT,
+   VK_SUBPASS_DS_ATTACHMENT,
+   VK_SUBPASS_DS_RESOLVE_ATTACHMENT,
+   VK_SUBPASS_FSR_ATTACHMENT,
+   VK_SUBPASS_ATTACHMENT_TYPE_COUNT,
+};
+
+struct vk_subpass_attachment_iter {
+   struct {
+      uint32_t count;
+      struct vk_subpass_attachment *attachments;
+   } types[VK_SUBPASS_ATTACHMENT_TYPE_COUNT];
+   struct {
+      enum vk_subpass_attachment_type type;
+      uint32_t idx;
+   } cur;
+};
+
+static inline struct vk_subpass_attachment *
+vk_subpass_first_attachment(const struct vk_subpass *subpass,
+                            struct vk_subpass_attachment_iter *iter)
+{
+   *iter = (struct vk_subpass_attachment_iter){
+      .types = {
+         [VK_SUBPASS_INPUT_ATTACHMENT] = {
+            .count = subpass->input_count,
+            .attachments = subpass->input_attachments,
+         },
+         [VK_SUBPASS_COLOR_ATTACHMENT] = {
+            .count = subpass->color_count,
+            .attachments = subpass->color_attachments,
+         },
+         [VK_SUBPASS_COLOR_RESOLVE_ATTACHMENT] = {
+            .count = subpass->color_resolve_count,
+            .attachments = subpass->color_resolve_attachments,
+         },
+         [VK_SUBPASS_DS_ATTACHMENT] = {
+            .count = subpass->depth_stencil_attachment ? 1 : 0,
+            .attachments = subpass->depth_stencil_attachment,
+         },
+         [VK_SUBPASS_DS_RESOLVE_ATTACHMENT] = {
+            .count = subpass->depth_stencil_resolve_attachment ? 1 : 0,
+            .attachments = subpass->depth_stencil_resolve_attachment,
+         },
+         [VK_SUBPASS_FSR_ATTACHMENT] = {
+            .count = subpass->fragment_shading_rate_attachment ? 1 : 0,
+            .attachments = subpass->fragment_shading_rate_attachment,
+         },
+      },
+   };
+
+   for (++iter->cur.type; iter->cur.type < VK_SUBPASS_ATTACHMENT_TYPE_COUNT;
+        ++iter->cur.type) {
+      if (iter->types[iter->cur.type].count)
+         return &iter->types[iter->cur.type].attachments[0];
+   }
+
+   return NULL;
+}
+
+static inline struct vk_subpass_attachment *
+vk_subpass_next_attachment(struct vk_subpass_attachment_iter *iter)
+{
+   if (iter->cur.type >= VK_SUBPASS_ATTACHMENT_TYPE_COUNT)
+      return NULL;
+
+   if (iter->cur.idx + 1 < iter->types[iter->cur.type].count)
+      return &iter->types[iter->cur.type].attachments[++iter->cur.idx];
+
+   iter->cur.idx = 0;
+   for (++iter->cur.type; iter->cur.type < VK_SUBPASS_ATTACHMENT_TYPE_COUNT;
+        ++iter->cur.type) {
+      if (iter->types[iter->cur.type].count)
+         return &iter->types[iter->cur.type].attachments[0];
+   }
+
+   return NULL;
+}
+
+#define vk_subpass_foreach_attachment(__subpass, __iter, __att)                \
+   for (struct vk_subpass_attachment *__att =                                  \
+           vk_subpass_first_attachment(__subpass, __iter);                     \
+        __att; __att = vk_subpass_next_attachment(__iter))
 
 /***/
 struct vk_render_pass_attachment {

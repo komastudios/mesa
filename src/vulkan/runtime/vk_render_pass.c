@@ -570,9 +570,6 @@ vk_subpass_create(const VkRenderPassCreateInfo2 *pCreateInfo,
    if (mrtss && !mrtss->multisampledRenderToSingleSampledEnable)
       mrtss = NULL;
 
-   subpass->attachment_count = subpass_attachment_count;
-   subpass->attachments = subpass_attachments;
-
    if (device->enabled_features.legacyDithering) {
       subpass->legacy_dithering_enabled =
          desc->flags & VK_SUBPASS_DESCRIPTION_ENABLE_LEGACY_DITHERING_BIT_EXT;
@@ -848,10 +845,10 @@ vk_common_CreateRenderPass2(VkDevice _device,
    for (uint32_t s = 0; s < pCreateInfo->subpassCount; s++) {
       struct vk_subpass *subpass =
          vk_render_pass_get_subpass(pass, pCreateInfo->subpassCount - 1 - s);
+      struct vk_subpass_attachment_iter att_iter;
 
       /* First, compute last_subpass for all the attachments */
-      for (uint32_t a = 0; a < subpass->attachment_count; a++) {
-         struct vk_subpass_attachment *att = &subpass->attachments[a];
+      vk_subpass_foreach_attachment(subpass, &att_iter, att) {
          if (att->attachment == VK_ATTACHMENT_UNUSED)
             continue;
 
@@ -866,8 +863,7 @@ vk_common_CreateRenderPass2(VkDevice _device,
        * we end up with the right last_subpass even if the same attachment is
        * used twice within a subpass.
        */
-      for (uint32_t a = 0; a < subpass->attachment_count; a++) {
-         const struct vk_subpass_attachment *att = &subpass->attachments[a];
+      vk_subpass_foreach_attachment(subpass, &att_iter, att) {
          if (att->attachment == VK_ATTACHMENT_UNUSED)
             continue;
 
@@ -2233,9 +2229,9 @@ begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
    }
 
+   struct vk_subpass_attachment_iter att_iter;
    uint32_t max_image_barrier_count = 0;
-   for (uint32_t a = 0; a < subpass->attachment_count; a++) {
-      const struct vk_subpass_attachment *sp_att = &subpass->attachments[a];
+   vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
       if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
          continue;
 
@@ -2251,8 +2247,7 @@ begin_subpass_barriers(struct vk_command_buffer *cmd_buffer)
    STACK_ARRAY(VkImageMemoryBarrier2, image_barriers, max_image_barrier_count);
    uint32_t image_barrier_count = 0;
 
-   for (uint32_t a = 0; a < subpass->attachment_count; a++) {
-      const struct vk_subpass_attachment *sp_att = &subpass->attachments[a];
+   vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
       if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
          continue;
 
@@ -2302,9 +2297,9 @@ subpass_load_attachments(struct vk_command_buffer *cmd_buffer)
    const struct vk_subpass *subpass =
       vk_render_pass_get_subpass(cmd_buffer->render_pass,
                                  cmd_buffer->subpass_idx);
+   struct vk_subpass_attachment_iter att_iter;
 
-   for (uint32_t a = 0; a < subpass->attachment_count; a++) {
-      const struct vk_subpass_attachment *sp_att = &subpass->attachments[a];
+   vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
       if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
          continue;
 
