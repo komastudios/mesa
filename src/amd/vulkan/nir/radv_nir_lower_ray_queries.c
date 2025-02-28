@@ -234,8 +234,8 @@ init_ray_query_vars(nir_shader *shader, unsigned array_length, struct ray_query_
    uint32_t shared_stack_entries = shader->info.ray_queries == 1 ? 16 : 8;
    uint32_t shared_stack_size = workgroup_size * shared_stack_entries * 4;
    uint32_t shared_offset = align(shader->info.shared_size, 4);
-   if (shader->info.stage != MESA_SHADER_COMPUTE || array_length > 1 ||
-       shared_offset + shared_stack_size > max_shared_size) {
+   bool stage_is_supported = shader->info.stage == MESA_SHADER_COMPUTE || gl_shader_stage_is_rt(shader->info.stage);
+   if (!stage_is_supported || array_length > 1 || shared_offset + shared_stack_size > max_shared_size) {
       dst->stack =
          rq_variable_create(dst, shader, array_length,
                             glsl_array_type(glsl_uint_type(), MAX_SCRATCH_STACK_ENTRY_COUNT, 0), VAR_NAME("_stack"));
