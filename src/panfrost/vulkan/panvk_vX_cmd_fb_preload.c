@@ -722,6 +722,7 @@ cmd_preload_color_attachments(struct panvk_cmd_buffer *cmdbuf,
       if (!fbinfo->rts[i].preload)
          continue;
 
+      printf("%s:%i fbinfo %p RT %d needs preload\n", __func__, __LINE__, fbinfo, i);
       enum pipe_format pfmt = fbinfo->rts[i].view->format;
       struct panvk_image_view *iview =
          cmdbuf->state.gfx.render.color_attachments.iviews[i];

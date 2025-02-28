@@ -46,10 +46,13 @@ render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
       union pipe_color_union *col =
          (union pipe_color_union *)&att->clearValue.color;
 
+      printf("%s:%i fbinfo %p clear att %d %x %x %x %x\n", __func__, __LINE__, fbinfo, index, col->ui[0], col->ui[1], col->ui[2], col->ui[3]);
       fbinfo->rts[index].clear = true;
       pan_pack_color(phys_dev->formats.blendable,
                      fbinfo->rts[index].clear_value, col, fmt, false);
+      assert(fbinfo->rts[index].preload == false);
    } else if (att->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD) {
+      printf("%s:%i RT %d needs preload\n", __func__, __LINE__, index);
       fbinfo->rts[index].preload = true;
    }
 
@@ -427,21 +430,31 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
    struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
    struct pan_fb_info *fbinfo = &state->render.fb.info;
    VkClearAttachment clear_atts[MAX_RTS + 2];
+   uint32_t color_map[MAX_RTS] = {
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+   };
    uint32_t clear_att_count = 0;
 
    if (!state->render.bound_attachments)
       return;
 
+   printf("%s:%i render_info %p\n", __func__, __LINE__, render_info);
    for (unsigned i = 0; i < fbinfo->rt_count; i++) {
       if (!fbinfo->rts[i].view)
          continue;
 
       fbinfo->rts[i].preload = true;
+      printf("%s:%i RT %d forced to preload\n", __func__, __LINE__, i);
 
       if (fbinfo->rts[i].clear && render_info) {
          const VkRenderingAttachmentInfo *att =
             &render_info->pColorAttachments[i];
 
+         printf("%s:%i draw clear att %d\n", __func__, __LINE__, i);
+         color_map[i] = i;
          clear_atts[clear_att_count++] = (VkClearAttachment){
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .colorAttachment = i,
@@ -502,7 +515,7 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
                                        &dep_info);
 #endif
 
-   if (clear_att_count) {
+   if (clear_att_count && false) {
       assert(render_info);
 
       VkClearRect clear_rect = {
@@ -511,7 +524,7 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
          .layerCount = render_info->viewMask ? 1 : render_info->layerCount,
       };
 
-      panvk_per_arch(cmd_clear_attachments)(cmdbuf, NULL, clear_att_count,
+      panvk_per_arch(cmd_clear_attachments)(cmdbuf, color_map, clear_att_count,
                                             clear_atts, 1, &clear_rect);
    }
 }
@@ -530,8 +543,10 @@ panvk_per_arch(cmd_preload_render_area_border)(
        (fbinfo->extent.maxy % 32) == 31);
 
    /* If the render area is aligned on a 32x32 section, we're good. */
-   if (!render_area_is_32x32_aligned)
+   if (!render_area_is_32x32_aligned) {
+      printf("%s:%i render_info %p\n", __func__, __LINE__, render_info);
       panvk_per_arch(cmd_force_fb_preload)(cmdbuf, render_info);
+   }
 }
 
 static void

@@ -205,6 +205,7 @@ void panvk_per_arch(cmd_clear_attachments)(struct panvk_cmd_buffer *cmdbuf,
    /* Multiview is not supported pre-v10 */
    assert(cmdbuf->state.gfx.render.view_mask == 0 || PAN_ARCH >= 10);
 
+   printf("%s:%i color_map %p\n", __func__, __LINE__, color_map);
    if (color_map) {
       render.remap_colors = true;
       memcpy(render.color_map, color_map,

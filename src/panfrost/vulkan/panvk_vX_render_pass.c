@@ -89,12 +89,10 @@ is_mergeable(const struct vk_render_pass *pass,
       return false;
    }
 
-   /*
-   if (ctx->last_subpass > ctx->first_subpass + 1) {
-      *last_subpass = ctx->first_subpass + 1;
+   if (0 && ctx->last_subpass > ctx->first_subpass + 2) {
+      *last_subpass = ctx->first_subpass + 2;
       return false;
    }
-   */
 
    *first_subpass = ctx->last_subpass + 1;
    *last_subpass = pass->subpass_count - 1;
@@ -133,7 +131,7 @@ panvk_per_arch(CreateRenderPass2)(VkDevice device,
    if (result != VK_SUCCESS)
       return result;
 
-//   return result;
+   //return result;
    VK_FROM_HANDLE(vk_render_pass, pass, *pRenderPass);
 
    result = merge_subpasses(pass, pAllocator);

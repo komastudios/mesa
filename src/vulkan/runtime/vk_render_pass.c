@@ -2296,11 +2296,13 @@ load_attachment(struct vk_command_buffer *cmd_buffer,
    struct vk_device_dispatch_table *disp =
       &cmd_buffer->base.device->dispatch_table;
 
+   printf("%s:%i att %d %p load_op=%d view_mask %x views_loaded %x\n", __func__, __LINE__, att_idx, rp_att, rp_att->load_op, view_mask, att_state->views_loaded);
    /* Don't load any views we've already loaded */
    view_mask &= ~att_state->views_loaded;
    if (view_mask == 0)
       return;
 
+   printf("%s:%i att %d\n", __func__, __LINE__, att_idx);
    /* From here on, if we return, we loaded the views */
    att_state->views_loaded |= view_mask;
 
@@ -2402,6 +2404,7 @@ subpass_prepare_color_attachments(
          color_attachment->loadOp = rp_att->load_op;
          color_attachment->clearValue = att_state->clear_value;
          att_state->views_loaded |= subpass->view_mask;
+         printf("%s:%i att %d att_state->views_loaded %x att_state->clear_value %x %x %x %x\n", __func__, __LINE__, sp_att->attachment, att_state->views_loaded, att_state->clear_value.color.uint32[0], att_state->clear_value.color.uint32[1], att_state->clear_value.color.uint32[2], att_state->clear_value.color.uint32[3]);
 
          VkImageLayout initial_layout;
          if (can_use_attachment_initial_layout(cmd_buffer,
@@ -2940,14 +2943,17 @@ subpass_load_attachments(struct vk_command_buffer *cmd_buffer)
 {
    const struct vk_render_pass *pass = cmd_buffer->render_pass;
 
+   printf("%s:%i\n", __func__, __LINE__);
    for (uint32_t s = cmd_buffer->subpass_idx; s < pass->subpass_count; s++) {
       const struct vk_subpass *subpass = vk_render_pass_get_subpass(pass, s);
       struct vk_subpass_attachment_iter att_iter;
 
+      printf("%s:%i subpass %d\n", __func__, __LINE__, s);
       vk_subpass_foreach_attachment(subpass, &att_iter, sp_att) {
          if (sp_att->attachment == VK_ATTACHMENT_UNUSED)
             continue;
 
+         printf("%s:%i subpass %d att %d\n", __func__, __LINE__, s, sp_att->attachment);
          load_attachment(cmd_buffer, sp_att->attachment, subpass->view_mask,
                          sp_att->layout, sp_att->stencil_layout);
       }
@@ -2956,6 +2962,7 @@ subpass_load_attachments(struct vk_command_buffer *cmd_buffer)
           subpass->merged == VK_SUBPASS_MERGED_LAST)
          break;
    }
+   printf("%s:%i\n", __func__, __LINE__);
 
    /* TODO: Handle preserve attachments
     *

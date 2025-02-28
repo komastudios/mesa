@@ -550,8 +550,11 @@ panvk_per_arch(CmdPipelineBarrier2)(VkCommandBuffer commandBuffer,
 
    panvk_per_arch(get_cs_deps)(cmdbuf, pDependencyInfo, &deps);
 
-   if (deps.needs_draw_flush)
+   if (deps.needs_draw_flush) {
+      assert(!(cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)));
+      printf("%s:%i pDependencyInfo->dependencyFlags %x\n", __func__, __LINE__, pDependencyInfo->dependencyFlags);
       panvk_per_arch(cmd_flush_draws)(cmdbuf);
+   }
 
    uint32_t wait_subqueue_mask = 0;
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {

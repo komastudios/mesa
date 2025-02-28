@@ -510,6 +510,7 @@ prepare_vp(struct panvk_cmd_buffer *cmdbuf)
          cfg.scissor_minimum_y = CLAMP(miny, 0, UINT16_MAX);
          cfg.scissor_maximum_x = CLAMP(maxx, 0, UINT16_MAX);
          cfg.scissor_maximum_y = CLAMP(maxy, 0, UINT16_MAX);
+         printf("%s:%i scissor %d,%d -> %d,%d\n", __func__, __LINE__, cfg.scissor_minimum_x, cfg.scissor_minimum_y, cfg.scissor_maximum_x, cfg.scissor_maximum_y);
       }
 
       struct mali_scissor_packed *scissor_box_ptr = &scissor_box;
@@ -1176,6 +1177,7 @@ set_provoking_vertex_mode(struct panvk_cmd_buffer *cmdbuf)
 static VkResult
 get_render_ctx(struct panvk_cmd_buffer *cmdbuf)
 {
+   printf("%s:%i\n", __func__, __LINE__);
    VkResult result = get_tiler_desc(cmdbuf);
    if (result != VK_SUCCESS)
       return result;
@@ -1537,6 +1539,7 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
             cfg.shader_modifies_coverage = fs->info.fs.writes_coverage ||
                                            fs->info.fs.can_discard ||
                                            alpha_to_coverage;
+	    cfg.primitive_barrier = true;
          } else {
             cfg.allow_forward_pixel_to_kill = true;
             cfg.allow_forward_pixel_to_be_killed = true;
@@ -1694,6 +1697,7 @@ prepare_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
       return result;
 
    if (!inherits_render_ctx(cmdbuf)) {
+      printf("%s:%i\n", __func__, __LINE__);
       result = get_render_ctx(cmdbuf);
       if (result != VK_SUCCESS)
          return result;
@@ -1770,6 +1774,11 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
    VkResult result;
+
+   if (cmdbuf->vk.subpass_idx == 4)
+      return;
+
+   printf("%s:%i subpass_idx %d\n", __func__, __LINE__, cmdbuf->vk.subpass_idx);
 
    /* If there's no vertex shader, we can skip the draw. */
    if (!panvk_priv_mem_dev_addr(vs->spds.pos_points))
@@ -1851,6 +1860,8 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
                         cs_shader_res_sel(0, 0, 1, 0),
                         cs_shader_res_sel(2, 2, 2, 0), cs_undef());
    }
+   cs_finish_tiling(b, false);
+   cs_wait_slots(b, SB_ALL_ITERS_MASK, false);
    cs_req_res(b, 0);
 }
 
@@ -1863,6 +1874,7 @@ panvk_per_arch(cmd_prepare_exec_cmd_for_draws)(
       return VK_SUCCESS;
 
    if (!inherits_render_ctx(primary)) {
+      printf("%s:%i\n", __func__, __LINE__);
       VkResult result  = get_render_ctx(primary);
       if (result != VK_SUCCESS)
          return result;
@@ -2564,6 +2576,7 @@ void
 panvk_per_arch(cmd_flush_draws)(struct panvk_cmd_buffer *cmdbuf)
 {
    /* If there was no draw queued, we don't need to force a preload. */
+   printf("%s:%i FBDS %lx TILER %lx inherits FB %d\n", __func__, __LINE__, cmdbuf->state.gfx.render.fbds.gpu, cmdbuf->state.gfx.render.tiler, inherits_render_ctx(cmdbuf));
    if (cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)) {
       flush_tiling(cmdbuf);
       issue_fragment_jobs(cmdbuf);
@@ -2571,6 +2584,7 @@ panvk_per_arch(cmd_flush_draws)(struct panvk_cmd_buffer *cmdbuf)
              sizeof(cmdbuf->state.gfx.render.fbds));
       cmdbuf->state.gfx.render.tiler = 0;
 
+      printf("%s:%i\n", __func__, __LINE__);
       panvk_per_arch(cmd_force_fb_preload)(cmdbuf, NULL);
 
       /* We inherited the render context, and need to let the primary command
@@ -2579,8 +2593,10 @@ panvk_per_arch(cmd_flush_draws)(struct panvk_cmd_buffer *cmdbuf)
          inherits_render_ctx(cmdbuf);
 
       /* Re-emit the FB/Tiler descs if we inherited them. */
-      if (inherits_render_ctx(cmdbuf))
+      if (inherits_render_ctx(cmdbuf)) {
+         printf("%s:%i\n", __func__, __LINE__);
          get_render_ctx(cmdbuf);
+      }
    }
 }
 
@@ -2620,6 +2636,7 @@ panvk_per_arch(CmdEndRendering)(VkCommandBuffer commandBuffer)
       /* If we're suspending the render pass and we didn't inherit the render
        * context, we need to emit it now, so it's available when the render pass
        * is resumed. */
+      printf("%s:%i\n", __func__, __LINE__);
       VkResult result = get_render_ctx(cmdbuf);
       if (result != VK_SUCCESS)
          return;
