@@ -47,7 +47,7 @@ for item in $(echo "$FIRMWARE" | jq -c '.[]'); do
     fi
     FIRMWARE_DST_DIR="${ROOTFS}/${dst}"
 
-    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 --create-dirs --output-dir "${FIRMWARE_DST_DIR}" -o "${file}" "${FIRMWARE_SRC_PATH}"
+    curl-with-retry --create-dirs --output-dir "${FIRMWARE_DST_DIR}" -o "${file}" "${FIRMWARE_SRC_PATH}"
   done
 
 done

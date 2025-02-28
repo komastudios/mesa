@@ -137,7 +137,7 @@ for commit in "${!cts_commits_to_backport}"
 do
   PATCH_URL="https://github.com/KhronosGroup/VK-GL-CTS/commit/$commit.patch"
   echo "Apply patch to ${DEQP_API} CTS from $PATCH_URL"
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 $PATCH_URL | \
+  curl-with-retry $PATCH_URL | \
     GIT_COMMITTER_DATE=$(LC_TIME=C date -d@0) git am -
 done
 

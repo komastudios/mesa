@@ -383,8 +383,7 @@ if [[ -e ".gitlab-ci/local/build-rootfs.sh" ]]; then
 fi
 
 ############### Download kernel modules
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -O "${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/modules.tar.zst"
+curl-with-retry -O "${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/modules.tar.zst"
 tar --keep-directory-symlink --zstd -xf modules.tar.zst -C "$ROOTFS/"
 
 ############### Delete rust, since the tests won't be compiling anything.

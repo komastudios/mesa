@@ -12,8 +12,7 @@ overrideDll() {
 dxvk_install_release() {
     local DXVK_VERSION=${1:?}
 
-    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-	-O "https://github.com/doitsujin/dxvk/releases/download/v${DXVK_VERSION}/dxvk-${DXVK_VERSION}.tar.gz"
+    curl-with-retry -O "https://github.com/doitsujin/dxvk/releases/download/v${DXVK_VERSION}/dxvk-${DXVK_VERSION}.tar.gz"
     tar xzpf dxvk-"${DXVK_VERSION}".tar.gz
     cp "dxvk-${DXVK_VERSION}"/x64/*.dll "$WINEPREFIX/drive_c/windows/system32/"
     overrideDll d3d9

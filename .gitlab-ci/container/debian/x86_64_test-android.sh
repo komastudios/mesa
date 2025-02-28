@@ -41,8 +41,7 @@ apt-get install -y --no-remove --no-install-recommends \
 
 # Fetch the NDK and extract just the toolchain we want.
 ndk="android-ndk-${ANDROID_NDK_VERSION}"
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -o "$ndk.zip" "https://dl.google.com/android/repository/$ndk-linux.zip"
+curl-with-retry -o "$ndk.zip" "https://dl.google.com/android/repository/$ndk-linux.zip"
 unzip -d / "$ndk.zip"
 rm "$ndk.zip"
 
@@ -92,15 +91,13 @@ CUTTLEFISH_BUILD_NUMBER=20250115.001
 mkdir /cuttlefish
 pushd /cuttlefish
 
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -o aosp_cf_x86_64_phone-img-$CUTTLEFISH_BUILD_NUMBER.zip "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CUTTLEFISH_PROJECT_PATH}/aosp-${CUTTLEFISH_BUILD_VERSION_TAGS}.${CUTTLEFISH_BUILD_NUMBER}/aosp_cf_x86_64_phone-img-$CUTTLEFISH_BUILD_NUMBER.zip"
+curl-with-retry -o aosp_cf_x86_64_phone-img-$CUTTLEFISH_BUILD_NUMBER.zip "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CUTTLEFISH_PROJECT_PATH}/aosp-${CUTTLEFISH_BUILD_VERSION_TAGS}.${CUTTLEFISH_BUILD_NUMBER}/aosp_cf_x86_64_phone-img-$CUTTLEFISH_BUILD_NUMBER.zip"
 
 unzip aosp_cf_x86_64_phone-img-$CUTTLEFISH_BUILD_NUMBER.zip
 rm aosp_cf_x86_64_phone-img-$CUTTLEFISH_BUILD_NUMBER.zip
 ls -lhS ./*
 
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -o cvd-host_package.tar.gz "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CUTTLEFISH_PROJECT_PATH}/aosp-${CUTTLEFISH_BUILD_VERSION_TAGS}.${CUTTLEFISH_BUILD_NUMBER}/cvd-host_package.tar.gz"
+curl-with-retry -o cvd-host_package.tar.gz "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CUTTLEFISH_PROJECT_PATH}/aosp-${CUTTLEFISH_BUILD_VERSION_TAGS}.${CUTTLEFISH_BUILD_NUMBER}/cvd-host_package.tar.gz"
 tar -xzvf cvd-host_package.tar.gz
 rm cvd-host_package.tar.gz
 
@@ -108,10 +105,8 @@ AOSP_KERNEL_PROJECT_PATH=ao2/aosp-kernel-manifest
 AOSP_KERNEL_BUILD_VERSION_TAGS=common-android14-6.1-venus
 AOSP_KERNEL_BUILD_NUMBER=20241107.001
 
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -o bzImage "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${AOSP_KERNEL_PROJECT_PATH}/aosp-kernel-common-${AOSP_KERNEL_BUILD_VERSION_TAGS}.${AOSP_KERNEL_BUILD_NUMBER}/bzImage"
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -o initramfs.img "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${AOSP_KERNEL_PROJECT_PATH}/aosp-kernel-common-${AOSP_KERNEL_BUILD_VERSION_TAGS}.${AOSP_KERNEL_BUILD_NUMBER}/initramfs.img"
+curl-with-retry -o bzImage "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${AOSP_KERNEL_PROJECT_PATH}/aosp-kernel-common-${AOSP_KERNEL_BUILD_VERSION_TAGS}.${AOSP_KERNEL_BUILD_NUMBER}/bzImage"
+curl-with-retry -o initramfs.img "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${AOSP_KERNEL_PROJECT_PATH}/aosp-kernel-common-${AOSP_KERNEL_BUILD_VERSION_TAGS}.${AOSP_KERNEL_BUILD_NUMBER}/initramfs.img"
 
 popd
 

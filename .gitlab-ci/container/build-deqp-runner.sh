@@ -44,7 +44,7 @@ for commit in "${commits_to_backport[@]}"
 do
   PATCH_URL="https://gitlab.freedesktop.org/mesa/deqp-runner/-/commit/$commit.patch"
   echo "Backport deqp-runner commit $commit from $PATCH_URL"
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 $PATCH_URL | git am
+  curl-with-retry $PATCH_URL | git am
 done
 
 for patch in "${patch_files[@]}"

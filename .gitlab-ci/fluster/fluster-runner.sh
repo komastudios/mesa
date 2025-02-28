@@ -26,7 +26,7 @@ fi
 
 FLUSTER_VECTORS_HOST_PATH="${FDO_HTTP_CACHE_URI:-}https://${FLUSTER_VECTORS_HOST_PATH}/vectors.tar.zst"
 
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 ${FLUSTER_VECTORS_HOST_PATH} | tar --zstd -x -C /usr/local/
+curl-with-retry ${FLUSTER_VECTORS_HOST_PATH} | tar --zstd -x -C /usr/local/
 
 INSTALL="$PWD/install"
 

@@ -10,8 +10,7 @@ else
   VER="${LLVM_VERSION}.0.0"
 fi
 
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-    -O "https://github.com/KhronosGroup/SPIRV-LLVM-Translator/archive/refs/tags/v${VER}.tar.gz"
+curl-with-retry -O "https://github.com/KhronosGroup/SPIRV-LLVM-Translator/archive/refs/tags/v${VER}.tar.gz"
 tar -xvf "v${VER}.tar.gz" && rm "v${VER}.tar.gz"
 
 mkdir "SPIRV-LLVM-Translator-${VER}/build"
