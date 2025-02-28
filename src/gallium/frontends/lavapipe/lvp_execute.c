@@ -3040,9 +3040,33 @@ static void handle_clear_color_image(struct vk_cmd_queue_entry *cmd,
                                      struct rendering_state *state)
 {
    LVP_FROM_HANDLE(lvp_image, image, cmd->u.clear_color_image.image);
+
+   enum pipe_format format = image->planes[0].bo->format;
+   const struct util_format_description *desc = util_format_description(format);
+   int c = util_format_get_first_non_void_channel(desc->format);
+   bool is_int64 = c >= 0 && desc->channel[c].pure_integer && desc->channel[c].size == 64;
+   if (is_int64) {
+      switch (format) {
+      case PIPE_FORMAT_R64_UINT:
+         format = PIPE_FORMAT_R32G32_UINT;
+         break;
+      case PIPE_FORMAT_R64_SINT:
+         format = PIPE_FORMAT_R32G32_SINT;
+         break;
+      case PIPE_FORMAT_R64G64_UINT:
+         format = PIPE_FORMAT_R32G32B32A32_UINT;
+         break;
+      case PIPE_FORMAT_R64G64_SINT:
+         format = PIPE_FORMAT_R32G32B32A32_SINT;
+         break;
+      default:
+         unreachable("Invalid format for 64bit clears");
+      }
+   }
+
    union util_color uc;
    uint32_t *col_val = uc.ui;
-   util_pack_color_union(image->planes[0].bo->format, &uc, (void*)cmd->u.clear_color_image.color);
+   util_pack_color_union(format, &uc, (void*)cmd->u.clear_color_image.color);
    for (unsigned i = 0; i < cmd->u.clear_color_image.range_count; i++) {
       VkImageSubresourceRange *range = &cmd->u.clear_color_image.ranges[i];
       struct pipe_box box;
@@ -3066,8 +3090,19 @@ static void handle_clear_color_image(struct vk_cmd_queue_entry *cmd,
             box.depth = vk_image_subresource_layer_count(&image->vk, range);
          }
 
-         state->pctx->clear_texture(state->pctx, image->planes[0].bo,
-                                    j, &box, (void *)col_val);
+         if (is_int64) {
+            struct pipe_transfer *transfer;
+            void *data = state->pctx->texture_map(state->pctx, image->planes[0].bo,
+                                                  j, PIPE_MAP_WRITE, &box, &transfer);
+
+            util_fill_box(data, format, transfer->stride, transfer->layer_stride,
+                          0, 0, 0, box.width, box.height, box.depth, &uc);
+
+            state->pctx->texture_unmap(state->pctx, transfer);
+         } else {
+            state->pctx->clear_texture(state->pctx, image->planes[0].bo,
+                                       j, &box, (void *)col_val);
+         }
       }
    }
 }
