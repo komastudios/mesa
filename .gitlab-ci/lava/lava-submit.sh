@@ -5,7 +5,7 @@
 # If we run in the fork (not from mesa or Marge-bot), reuse mainline kernel and rootfs, if exist.
 _check_artifact_path() {
 	_url="https://${1}/${2}"
-	if curl -s -o /dev/null -I -L -f --retry 4 --retry-delay 15 "${_url}"; then
+	if curl-with-retry -s -o /dev/null -I --retry-delay 15 "${_url}"; then
 		echo -n "${_url}"
 	fi
 }

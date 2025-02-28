@@ -21,7 +21,7 @@ if [ -n "$CI" ] && [ ! -s "${S3_JWT_FILE}" ]; then
   exit 1
 fi
 
-if curl -s -o /dev/null -I -L -f --retry 4 --retry-delay 15 "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CI_PROJECT_PATH}/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"; then
+if curl-with-retry -s -o /dev/null -I --retry-delay 15 "https://${S3_HOST}/${S3_ANDROID_BUCKET}/${CI_PROJECT_PATH}/${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst"; then
   echo "Artifact ${ANDROID_LLVM_ARTIFACT_NAME}.tar.zst already exists, skip re-building."
 
   # Download prebuilt LLVM libraries for Android when they have not changed,
