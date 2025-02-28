@@ -46,6 +46,11 @@ echo -e "retry_connrefused = on\n" \
 	"retry_on_http_error = 429,500,502,503,504\n" \
         "wait_retry = 32" >> /etc/wgetrc
 
+printf '%s\n' > /usr/local/bin/curl-with-retry \
+  '#!/bin/bash' \
+  'exec curl -L --retry 4 -f --retry-all-errors --retry-delay 60 "$@"'
+chmod +x /usr/local/bin/curl-with-retry
+
 # Ensure that rust tools are in PATH if they exist
 CARGO_ENV_FILE="$HOME/.cargo/env"
 if [ -f "$CARGO_ENV_FILE" ]; then
