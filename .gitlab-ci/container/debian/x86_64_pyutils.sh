@@ -11,6 +11,8 @@ set -e
 
 set -o xtrace
 
+. .gitlab-ci/container/container_pre_build.sh
+
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get install -y ca-certificates

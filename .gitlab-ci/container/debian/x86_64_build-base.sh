@@ -18,6 +18,8 @@ apt-get install -y ca-certificates curl gnupg2
 sed -i -e 's/http:\/\/deb/https:\/\/deb/g' /etc/apt/sources.list.d/*
 echo "deb [trusted=yes] https://gitlab.freedesktop.org/gfx-ci/ci-deb-repo/-/raw/${PKG_REPO_REV}/ ${FDO_DISTRIBUTION_VERSION%-*} main" | tee /etc/apt/sources.list.d/gfx-ci_.list
 
+. .gitlab-ci/container/container_pre_build.sh
+
 . .gitlab-ci/container/debian/maybe-add-llvm-repo.sh
 
 # Ephemeral packages (installed for this script and removed again at

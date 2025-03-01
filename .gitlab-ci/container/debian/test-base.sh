@@ -23,6 +23,8 @@ echo "deb [trusted=yes] https://gitlab.freedesktop.org/gfx-ci/ci-deb-repo/-/raw/
 
 : "${LLVM_VERSION:?llvm version not set!}"
 
+. .gitlab-ci/container/container_pre_build.sh
+
 . .gitlab-ci/container/debian/maybe-add-llvm-repo.sh
 
 # Ephemeral packages (installed for this script and removed again at the end)
