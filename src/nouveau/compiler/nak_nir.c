@@ -310,10 +310,10 @@ nak_preprocess_nir(nir_shader *nir, const struct nak_compiler *nak)
       .lower_txd_shadow = true,
       .lower_txp = ~0,
       /* TODO: More lowering */
+      .sparse_bit = NIR_SPARSE_BIT_ALL,
    };
    OPT(nir, nir_lower_tex, &tex_options);
    OPT(nir, nir_normalize_cubemap_coords);
-   OPT(nir, nir_lower_sparse_resident_query, NIR_SPARSE_BIT_ALL);
 
    nir_lower_image_options image_options = {
       .lower_cube_size = true,

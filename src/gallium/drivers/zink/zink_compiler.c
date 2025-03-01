@@ -3685,10 +3685,8 @@ lower_sparse_instr(nir_builder *b, nir_instr *instr, void *data)
 static bool
 lower_sparse(nir_shader *shader)
 {
-   bool progress = nir_shader_instructions_pass(shader, lower_sparse_instr,
-                                                nir_metadata_dominance, NULL);
-   progress |= nir_lower_sparse_resident_query(shader, NIR_SPARSE_BIT_ALL);
-   return progress;
+   return nir_shader_instructions_pass(shader, lower_sparse_instr,
+                                       nir_metadata_dominance, NULL);
 }
 
 static bool
@@ -6375,6 +6373,7 @@ zink_shader_finalize(struct pipe_screen *pscreen, struct nir_shader *nir)
 
    nir_lower_tex_options tex_opts = {
       .lower_invalid_implicit_lod = true,
+      .sparse_bit = NIR_SPARSE_BIT_ALL,
    };
    /*
       Sampled Image must be an object whose type is OpTypeSampledImage.

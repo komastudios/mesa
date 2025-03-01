@@ -532,6 +532,7 @@ radv_shader_spirv_to_nir(struct radv_device *device, const struct radv_shader_st
       .lower_lod_zero_width = true,
       .lower_invalid_implicit_lod = true,
       .lower_1d = pdev->info.gfx_level == GFX9,
+      .sparse_bit = NIR_SPARSE_BIT_ALL | NIR_SPARSE_BIT_INVERTED,
    };
 
    NIR_PASS(_, nir, nir_lower_tex, &tex_options);

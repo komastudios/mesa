@@ -254,6 +254,9 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       .lower_tg4_offsets = true,
       .lower_to_fragment_fetch_amd = sscreen->info.gfx_level < GFX11,
       .lower_1d = sscreen->info.gfx_level == GFX9,
+
+      /* code==0 means sparse texels are resident */
+      .sparse_bit = NIR_SPARSE_BIT_ALL | NIR_SPARSE_BIT_INVERTED,
    };
    NIR_PASS_V(nir, nir_lower_tex, &lower_tex_options);
 
@@ -263,10 +266,6 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
                                          !(sscreen->debug_flags & DBG(NO_FMASK)),
    };
    NIR_PASS_V(nir, nir_lower_image, &lower_image_options);
-
-   /* code==0 means sparse texels are resident */
-   NIR_PASS_V(nir, nir_lower_sparse_resident_query,
-              NIR_SPARSE_BIT_ALL | NIR_SPARSE_BIT_INVERTED);
 
    NIR_PASS_V(nir, ac_nir_lower_sin_cos);
 

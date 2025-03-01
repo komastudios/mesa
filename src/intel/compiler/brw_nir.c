@@ -1150,6 +1150,9 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
       .lower_offset_filter =
          devinfo->verx10 >= 125 ? lower_xehp_tg4_offset_filter : NULL,
       .lower_invalid_implicit_lod = true,
+
+      /* The data reported by the sampler is a single bit per lane */
+      .sparse_bit = NIR_SPARSE_BIT_SUBGROUP_INVOCATION,
    };
 
    /* In the case where TG4 coords are lowered to offsets and we have a
@@ -2068,6 +2071,7 @@ brw_nir_apply_key(nir_shader *nir,
       .lower_txd_clamp_if_sampler_index_not_lt_16 = true,
       .lower_invalid_implicit_lod = true,
       .lower_index_to_offset = true,
+      .sparse_bit = NIR_SPARSE_BIT_SUBGROUP_INVOCATION,
    };
    OPT(nir_lower_tex, &nir_tex_opts);
 

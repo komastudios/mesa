@@ -206,11 +206,6 @@ lower_sparse_intrinsics(nir_builder *b, nir_instr *instr, void *cb_data)
 bool
 intel_nir_lower_sparse_intrinsics(nir_shader *nir)
 {
-   /* The data reported by the sampler is a single bit per lane */
-   bool progress =
-      nir_lower_sparse_resident_query(nir, NIR_SPARSE_BIT_SUBGROUP_INVOCATION);
-
-   progress |= nir_shader_instructions_pass(nir, lower_sparse_intrinsics,
-                                            nir_metadata_control_flow, NULL);
-   return progress;
+   return nir_shader_instructions_pass(nir, lower_sparse_intrinsics,
+                                       nir_metadata_control_flow, NULL);
 }

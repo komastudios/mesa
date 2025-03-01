@@ -766,6 +766,8 @@ agx_nir_lower_texture_early(nir_shader *s, bool support_lod_bias)
        * TODO: Stop using this lowering
        */
       .lower_txd_cube_map = true,
+
+      .sparse_bit = NIR_SPARSE_BIT_ZERO | NIR_SPARSE_BIT_INVERTED,
    };
 
    NIR_PASS(progress, s, nir_lower_tex, &lower_tex_options);
@@ -808,8 +810,6 @@ agx_nir_lower_texture(nir_shader *s)
    NIR_PASS(progress, s, nir_shader_intrinsics_pass, lower_images,
             nir_metadata_control_flow, NULL);
    NIR_PASS(progress, s, nir_legalize_16bit_sampler_srcs, tex_constraints);
-   NIR_PASS(progress, s, nir_lower_sparse_resident_query,
-            NIR_SPARSE_BIT_ZERO | NIR_SPARSE_BIT_INVERTED);
 
    /* Fold constants after nir_legalize_16bit_sampler_srcs so we can detect 0 in
     * lower_regular_texture. This is required for correctness.

@@ -143,13 +143,6 @@ lower_sparse(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    return true;
 }
 
-bool
-nir_lower_sparse_resident_query(nir_shader *nir, enum nir_sparse_bit bit)
-{
-   return nir_shader_intrinsics_pass(nir, lower_sparse,
-                                     nir_metadata_control_flow, &bit);
-}
-
 static bool
 project_src(nir_builder *b, nir_tex_instr *tex)
 {
@@ -1867,6 +1860,10 @@ nir_lower_tex(nir_shader *shader, const nir_lower_tex_options *options)
    nir_foreach_function_impl(impl, shader) {
       progress |= nir_lower_tex_impl(impl, options, shader->options);
    }
+
+   enum nir_sparse_bit sparse = options->sparse_bit;
+   progress |= nir_shader_intrinsics_pass(shader, lower_sparse,
+                                          nir_metadata_control_flow, &sparse);
 
    return progress;
 }

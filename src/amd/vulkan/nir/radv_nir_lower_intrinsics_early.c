@@ -24,15 +24,9 @@ pass(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 bool
 radv_nir_lower_intrinsics_early(nir_shader *nir, bool lower_view_index_to_zero)
 {
-   bool progress = false;
+   if (!lower_view_index_to_zero)
+      return false;
 
-   NIR_PASS(progress, nir, nir_lower_sparse_resident_query,
-            NIR_SPARSE_BIT_ALL | NIR_SPARSE_BIT_INVERTED);
-
-   if (lower_view_index_to_zero) {
-      NIR_PASS(progress, nir, nir_shader_intrinsics_pass, pass,
-               nir_metadata_control_flow, NULL);
-   }
-
-   return progress;
+   return nir_shader_intrinsics_pass(nir, pass,
+                                     nir_metadata_control_flow, NULL);
 }

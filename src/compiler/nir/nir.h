@@ -5596,6 +5596,11 @@ typedef struct nir_lower_tex_options {
     */
    bool lower_index_to_offset;
 
+   /* Description of the hardware sparse residency code. Sparse residency
+    * intrinsics are unconditionally lowered.
+    */
+   enum nir_sparse_bit sparse_bit;
+
    /**
     * Payload data to be sent to callback / filter functions.
     */
@@ -5605,9 +5610,6 @@ typedef struct nir_lower_tex_options {
 /** Lowers complex texture instructions to simpler ones */
 bool nir_lower_tex(nir_shader *shader,
                    const nir_lower_tex_options *options);
-
-bool
-nir_lower_sparse_resident_query(nir_shader *nir, enum nir_sparse_bit bit);
 
 typedef struct nir_lower_tex_shadow_swizzle {
    unsigned swizzle_r : 3;
