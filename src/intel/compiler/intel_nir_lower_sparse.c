@@ -35,10 +35,6 @@
  * using the dataport and the dataport unit doesn't provide residency
  * information. We need to use the sampler for residency.
  *
- * The is_sparse_texels_resident intrinsic is lowered to a bit checking
- * operation as the data reported by the sampler is a single bit per lane in
- * the first component.
- *
  * The tex_* instructions with a compare value need to be lower into 2
  * instructions due to a HW limitation :
  *
@@ -49,28 +45,6 @@
  *     texel format such as R16G16BA16_UNORM. Pixel Null mask Enable may
  *     incorrectly report pixels as referencing a Null surface."
  */
-
-static void
-lower_is_sparse_texels_resident(nir_builder *b, nir_intrinsic_instr *intrin)
-{
-   b->cursor = nir_instr_remove(&intrin->instr);
-
-   nir_def_rewrite_uses(
-      &intrin->def,
-      nir_i2b(b, nir_iand(b, intrin->src[0].ssa,
-                              nir_ishl(b, nir_imm_int(b, 1),
-                                          nir_load_subgroup_invocation(b)))));
-}
-
-static void
-lower_sparse_residency_code_and(nir_builder *b, nir_intrinsic_instr *intrin)
-{
-   b->cursor = nir_instr_remove(&intrin->instr);
-
-   nir_def_rewrite_uses(
-      &intrin->def,
-      nir_iand(b, intrin->src[0].ssa, intrin->src[1].ssa));
-}
 
 static void
 lower_sparse_image_load(nir_builder *b, nir_intrinsic_instr *intrin)
@@ -209,14 +183,6 @@ lower_sparse_intrinsics(nir_builder *b, nir_instr *instr, void *cb_data)
          lower_sparse_image_load(b, intrin);
          return true;
 
-      case nir_intrinsic_is_sparse_texels_resident:
-         lower_is_sparse_texels_resident(b, intrin);
-         return true;
-
-      case nir_intrinsic_sparse_residency_code_and:
-         lower_sparse_residency_code_and(b, intrin);
-         return true;
-
       default:
          return false;
       }
@@ -240,7 +206,11 @@ lower_sparse_intrinsics(nir_builder *b, nir_instr *instr, void *cb_data)
 bool
 intel_nir_lower_sparse_intrinsics(nir_shader *nir)
 {
-   return nir_shader_instructions_pass(nir, lower_sparse_intrinsics,
-                                       nir_metadata_control_flow,
-                                       NULL);
+   /* The data reported by the sampler is a single bit per lane */
+   bool progress =
+      nir_lower_sparse_resident_query(nir, NIR_SPARSE_BIT_SUBGROUP_INVOCATION);
+
+   progress |= nir_shader_instructions_pass(nir, lower_sparse_intrinsics,
+                                            nir_metadata_control_flow, NULL);
+   return progress;
 }
