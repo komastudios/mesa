@@ -1293,7 +1293,7 @@ sampler_index_lt(nir_tex_instr *tex, unsigned max)
 }
 
 static bool
-lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex)
+lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex, bool residency_inverted)
 {
    assert(tex->op == nir_texop_tg4);
    assert(nir_tex_instr_has_explicit_tg4_offsets(tex));
@@ -1337,10 +1337,12 @@ lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex)
       dest[i] = nir_get_scalar(&tex_copy->def, 3);
       if (tex->is_sparse) {
          nir_def *code = nir_channel(b, &tex_copy->def, 4);
-         if (residency)
-            residency = nir_sparse_residency_code_and(b, residency, code);
-         else
+         if (residency) {
+            nir_op op = residency_inverted ? nir_op_ior : nir_op_iand;
+            residency = nir_build_alu2(b, op, residency, code);
+         } else {
             residency = code;
+         }
       }
    }
    dest[4] = nir_get_scalar(residency, 0);
@@ -1799,7 +1801,9 @@ nir_lower_tex_block(nir_block *block, nir_builder *b,
       if (tex->op == nir_texop_tg4 &&
           nir_tex_instr_has_explicit_tg4_offsets(tex) &&
           options->lower_tg4_offsets) {
-         progress |= lower_tg4_offsets(b, tex);
+
+         bool sparse_inverted = options->sparse_bit & NIR_SPARSE_BIT_INVERTED;
+         progress |= lower_tg4_offsets(b, tex, sparse_inverted);
          continue;
       }
 
