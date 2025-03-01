@@ -3672,18 +3672,6 @@ lower_sparse_instr(nir_builder *b, nir_instr *instr, void *data)
          return true;
       }
 
-      case nir_intrinsic_sparse_residency_code_and: {
-         nir_def *res = nir_iand(b, intrin->src[0].ssa, intrin->src[1].ssa);
-         nir_def_rewrite_uses(&intrin->def, res);
-         return true;
-      }
-
-      case nir_intrinsic_is_sparse_texels_resident: {
-         nir_def *res = nir_i2b(b, intrin->src[0].ssa);
-         nir_def_rewrite_uses(&intrin->def, res);
-         return true;
-      }
-
       default:
          return false;
       }
@@ -3697,8 +3685,10 @@ lower_sparse_instr(nir_builder *b, nir_instr *instr, void *data)
 static bool
 lower_sparse(nir_shader *shader)
 {
-   return nir_shader_instructions_pass(shader, lower_sparse_instr,
-                                       nir_metadata_dominance, NULL);
+   bool progress = nir_shader_instructions_pass(shader, lower_sparse_instr,
+                                                nir_metadata_dominance, NULL);
+   progress |= nir_lower_sparse_resident_query(shader, NIR_SPARSE_BIT_ALL);
+   return progress;
 }
 
 static bool
