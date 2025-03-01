@@ -16,7 +16,7 @@ fi
 # Check which fluster vectors to get
 FLUSTER_VECTORS_HOST_PATH="${STORAGE_MAINLINE_HOST_PATH}/fluster/${FLUSTER_VECTORS_VERSION}"
 if [ "$CI_PROJECT_PATH" != "$FDO_UPSTREAM_REPO" ]; then
-  if ! curl -s -X HEAD -L --retry 4 -f --retry-delay 60 "https://${FLUSTER_VECTORS_HOST_PATH}/done"; then
+  if ! curl-with-retry -s -X HEAD "https://${FLUSTER_VECTORS_HOST_PATH}/done"; then
     echo "Using Fluster vectors from the fork, cached from mainline is unavailable."
     FLUSTER_VECTORS_HOST_PATH="${STORAGE_FORK_HOST_PATH}/fluster/${FLUSTER_VECTORS_VERSION}"
   else
@@ -26,7 +26,7 @@ fi
 
 FLUSTER_VECTORS_HOST_PATH="${FDO_HTTP_CACHE_URI:-}https://${FLUSTER_VECTORS_HOST_PATH}/vectors.tar.zst"
 
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 ${FLUSTER_VECTORS_HOST_PATH} | tar --zstd -x -C /usr/local/
+curl-with-retry ${FLUSTER_VECTORS_HOST_PATH} | tar --zstd -x -C /usr/local/
 
 INSTALL="$PWD/install"
 

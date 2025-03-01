@@ -23,8 +23,7 @@ apt-get install -y --no-remove "${EPHEMERAL[@]}"
 
 # Fetch the NDK and extract just the toolchain we want.
 ndk="android-ndk-${ANDROID_NDK_VERSION}"
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -o $ndk.zip https://dl.google.com/android/repository/$ndk-linux.zip
+curl-with-retry -o $ndk.zip https://dl.google.com/android/repository/$ndk-linux.zip
 unzip -d / $ndk.zip "$ndk/source.properties" "$ndk/build/cmake/*" "$ndk/toolchains/llvm/*"
 rm $ndk.zip
 # Since it was packed as a zip file, symlinks/hardlinks got turned into
@@ -58,8 +57,7 @@ done
 rm -rf $LIBDRM_VERSION
 
 export LIBELF_VERSION=libelf-0.8.13
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-  -O https://fossies.org/linux/misc/old/$LIBELF_VERSION.tar.gz
+curl-with-retry -O https://fossies.org/linux/misc/old/$LIBELF_VERSION.tar.gz
 
 # Not 100% sure who runs the mirror above so be extra careful
 if ! echo "4136d7b4c04df68b686570afa26988ac ${LIBELF_VERSION}.tar.gz" | md5sum -c -; then

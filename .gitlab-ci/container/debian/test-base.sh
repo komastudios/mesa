@@ -23,6 +23,8 @@ echo "deb [trusted=yes] https://gitlab.freedesktop.org/gfx-ci/ci-deb-repo/-/raw/
 
 : "${LLVM_VERSION:?llvm version not set!}"
 
+. .gitlab-ci/container/container_pre_build.sh
+
 . .gitlab-ci/container/debian/maybe-add-llvm-repo.sh
 
 # Ephemeral packages (installed for this script and removed again at the end)
@@ -173,7 +175,7 @@ if [ "$DEBIAN_ARCH" = amd64 ]; then
   export KERNEL_IMAGE_NAME=bzImage
   mkdir -p /kernel
   # shellcheck disable=SC2153 # KERNEL_IMAGE_BASE is set in the root .gitlab-ci.yml file
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+  curl-with-retry \
       -o "/kernel/${KERNEL_IMAGE_NAME}" "${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${KERNEL_IMAGE_NAME}"
   section_end kernel
 fi

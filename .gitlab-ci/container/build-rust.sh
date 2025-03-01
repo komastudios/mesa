@@ -13,7 +13,7 @@ RUST_VERSION=1.78.0-2024-05-02
 # For rust in Mesa, we use rustup to install.  This lets us pick an arbitrary
 # version of the compiler, rather than whatever the container's Debian comes
 # with.
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+curl-with-retry \
     --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
       --default-toolchain $RUST_VERSION \
       --profile minimal \

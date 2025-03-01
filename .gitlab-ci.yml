@@ -125,7 +125,7 @@ default:
       fi
     - >
       export SCRIPTS_DIR=$(mktemp -d) &&
-      curl -L -s --retry 4 -f --retry-all-errors --retry-delay 60 -O --output-dir "${SCRIPTS_DIR}" "${CI_PROJECT_URL}/-/raw/${CI_COMMIT_SHA}/.gitlab-ci/setup-test-env.sh" &&
+      curl-with-retry -s -O --output-dir "${SCRIPTS_DIR}" "${CI_PROJECT_URL}/-/raw/${CI_COMMIT_SHA}/.gitlab-ci/setup-test-env.sh" &&
       . ${SCRIPTS_DIR}/setup-test-env.sh
     - eval "$S3_JWT_FILE_SCRIPT"
 

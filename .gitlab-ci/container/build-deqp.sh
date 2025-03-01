@@ -117,7 +117,7 @@ git checkout FETCH_HEAD
 DEQP_COMMIT=$(git rev-parse FETCH_HEAD)
 
 if [ "$DEQP_VERSION" = "$DEQP_MAIN_COMMIT" ]; then
-  merge_base="$(curl -s https://api.github.com/repos/KhronosGroup/VK-GL-CTS/compare/main...$DEQP_MAIN_COMMIT | jq -r .merge_base_commit.sha)"
+  merge_base="$(curl-with-retry -s https://api.github.com/repos/KhronosGroup/VK-GL-CTS/compare/main...$DEQP_MAIN_COMMIT | jq -r .merge_base_commit.sha)"
   if [[ "$merge_base" != "$DEQP_MAIN_COMMIT" ]]; then
     echo "VK-GL-CTS commit $DEQP_MAIN_COMMIT is not a commit from the main branch."
     exit 1
@@ -137,7 +137,7 @@ for commit in "${!cts_commits_to_backport}"
 do
   PATCH_URL="https://github.com/KhronosGroup/VK-GL-CTS/commit/$commit.patch"
   echo "Apply patch to ${DEQP_API} CTS from $PATCH_URL"
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 $PATCH_URL | \
+  curl-with-retry $PATCH_URL | \
     GIT_COMMITTER_DATE=$(LC_TIME=C date -d@0) git am -
 done
 

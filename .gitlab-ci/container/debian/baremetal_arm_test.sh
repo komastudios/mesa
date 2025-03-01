@@ -37,7 +37,7 @@ apt-get update
 apt-get install -y --no-remove "${DEPS[@]}"
 
 # setup SNMPv2 SMI MIB
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
+curl-with-retry \
     https://raw.githubusercontent.com/net-snmp/net-snmp/master/mibs/SNMPv2-SMI.txt \
     -o /usr/share/snmp/mibs/SNMPv2-SMI.txt
 

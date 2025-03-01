@@ -99,23 +99,18 @@ else
 fi
 
 if echo "$BM_KERNEL $BM_DTB" | grep -q http; then
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-      "$BM_KERNEL" -o kernel
+  curl-with-retry "$BM_KERNEL" -o kernel
   # FIXME: modules should be supplied too
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-      "$BM_DTB" -o dtb
+  curl-with-retry "$BM_DTB" -o dtb
 
   cat kernel dtb > Image.gz-dtb
 
 elif [ -n "${EXTERNAL_KERNEL_TAG}" ]; then
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-      "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_KERNEL}" -o kernel
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-      "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/modules.tar.zst" -o modules.tar.zst
+  curl-with-retry "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_KERNEL}" -o kernel
+  curl-with-retry "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/modules.tar.zst" -o modules.tar.zst
 
   if [ -n "$BM_DTB" ]; then
-    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-	"${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_DTB}.dtb" -o dtb
+    curl-with-retry "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_DTB}.dtb" -o dtb
   fi
 
   cat kernel dtb > Image.gz-dtb || echo "No DTB available, using pure kernel."

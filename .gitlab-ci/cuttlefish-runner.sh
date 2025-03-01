@@ -107,7 +107,7 @@ $ADB push /deqp-runner/deqp-runner /data/deqp
 
 # download Android Mesa from S3
 MESA_ANDROID_ARTIFACT_URL=https://${PIPELINE_ARTIFACTS_BASE}/${S3_ANDROID_ARTIFACT_NAME}.tar.zst
-curl -L --retry 4 -f --retry-all-errors --retry-delay 60 -o ${S3_ANDROID_ARTIFACT_NAME}.tar.zst ${MESA_ANDROID_ARTIFACT_URL}
+curl-with-retry -o ${S3_ANDROID_ARTIFACT_NAME}.tar.zst ${MESA_ANDROID_ARTIFACT_URL}
 mkdir /mesa-android
 tar -C /mesa-android -xvf ${S3_ANDROID_ARTIFACT_NAME}.tar.zst
 rm "${S3_ANDROID_ARTIFACT_NAME}.tar.zst" &

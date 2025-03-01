@@ -93,8 +93,7 @@ if [ "$HWCI_KVM" = "true" ]; then
         modprobe ${KVM_KERNEL_MODULE}
 
     mkdir -p /kernel
-    curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-	-o "/kernel/${KERNEL_IMAGE_NAME}" \
+    curl-with-retry -o "/kernel/${KERNEL_IMAGE_NAME}" \
         "${KERNEL_IMAGE_BASE}/amd64/${KERNEL_IMAGE_NAME}"
 fi
 

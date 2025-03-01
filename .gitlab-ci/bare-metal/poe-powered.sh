@@ -89,8 +89,7 @@ date +'%F %T'
 
 # If BM_BOOTFS is an URL, download it
 if echo $BM_BOOTFS | grep -q http; then
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-    "${FDO_HTTP_CACHE_URI:-}$BM_BOOTFS" -o /tmp/bootfs.tar
+  curl-with-retry "${FDO_HTTP_CACHE_URI:-}$BM_BOOTFS" -o /tmp/bootfs.tar
   BM_BOOTFS=/tmp/bootfs.tar
 fi
 
@@ -110,12 +109,9 @@ if [ -n "${EXTERNAL_KERNEL_TAG}" ]; then
     exit 1
   fi
 
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-      "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_KERNEL}" -o "${BM_KERNEL}"
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-      "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_DTB}.dtb" -o "${BM_DTB}.dtb"
-  curl -L --retry 4 -f --retry-all-errors --retry-delay 60 \
-      "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/modules.tar.zst" -o modules.tar.zst
+  curl-with-retry "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_KERNEL}" -o "${BM_KERNEL}"
+  curl-with-retry "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/${BM_DTB}.dtb" -o "${BM_DTB}.dtb"
+  curl-with-retry "${FDO_HTTP_CACHE_URI:-}${KERNEL_IMAGE_BASE}/${DEBIAN_ARCH}/modules.tar.zst" -o modules.tar.zst
 fi
 
 date +'%F %T'
