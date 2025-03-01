@@ -5351,6 +5351,22 @@ enum ENUM_PACKED nir_lower_tex_packing {
    nir_lower_tex_packing_8,
 };
 
+enum nir_sparse_bit {
+   /* Residency given by zero/nonzero */
+   NIR_SPARSE_BIT_ALL = 0,
+
+   /* Residency given in bit 0 */
+   NIR_SPARSE_BIT_ZERO = 1,
+
+   /* Residency given in bit SubgroupInvocation */
+   NIR_SPARSE_BIT_SUBGROUP_INVOCATION = 2,
+
+   NIR_SPARSE_BIT_MASK = BITFIELD_MASK(2),
+
+   /* Bit flag indicating that 0 means resident and 1 means non-resident */
+   NIR_SPARSE_BIT_INVERTED = BITFIELD_BIT(2),
+};
+
 /***/
 typedef struct nir_lower_tex_options {
    /**
@@ -5589,6 +5605,9 @@ typedef struct nir_lower_tex_options {
 /** Lowers complex texture instructions to simpler ones */
 bool nir_lower_tex(nir_shader *shader,
                    const nir_lower_tex_options *options);
+
+bool
+nir_lower_sparse_resident_query(nir_shader *nir, enum nir_sparse_bit bit);
 
 typedef struct nir_lower_tex_shadow_swizzle {
    unsigned swizzle_r : 3;
