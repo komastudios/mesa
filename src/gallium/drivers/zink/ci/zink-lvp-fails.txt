@@ -126,7 +126,6 @@ spec@ext_transform_feedback@tessellation quads wireframe,Fail
 # Debian 12 CI update, see https://gitlab.freedesktop.org/mesa/mesa/-/issues/9072
 spec@ext_transform_feedback@tessellation quad_strip wireframe,Crash
 spec@!opengl 1.0@gl-1.0-dlist-beginend,Crash
-spec@nv_texture_barrier@blending-in-shader,Crash
 
 spec@arb_viewport_array@display-list,Fail
 
