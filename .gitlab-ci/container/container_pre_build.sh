@@ -48,7 +48,7 @@ echo -e "retry_connrefused = on\n" \
 
 printf '%s\n' > /usr/local/bin/curl-with-retry \
   '#!/bin/bash' \
-  'exec curl -L --retry 4 -f --retry-all-errors --retry-delay 60 "$@"'
+  'exec curl --location --retry 4 --fail --retry-all-errors --retry-delay 60 "$@"'
 chmod +x /usr/local/bin/curl-with-retry
 
 # Ensure that rust tools are in PATH if they exist
