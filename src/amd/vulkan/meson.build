@@ -72,7 +72,7 @@ libradv_files = files(
   'nir/radv_nir_lower_fs_barycentric.c',
   'nir/radv_nir_lower_fs_intrinsics.c',
   'nir/radv_nir_lower_hit_attrib_derefs.c',
-  'nir/radv_nir_lower_intrinsics_early.c',
+  'nir/radv_nir_lower_view_index_to_zero.c',
   'nir/radv_nir_lower_io.c',
   'nir/radv_nir_lower_primitive_shading_rate.c',
   'nir/radv_nir_lower_ray_queries.c',
