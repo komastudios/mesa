@@ -100,43 +100,31 @@ static const float bt2020_full_range_csc_offsets[3] = {
 static bool
 lower_sparse(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
+   if (intr->intrinsic != nir_intrinsic_is_sparse_texels_resident)
+      return false;
+
    enum nir_sparse_bit *mode_ = data;
    enum nir_sparse_bit bit = (*mode_) & NIR_SPARSE_BIT_MASK;
    bool inverted = (*mode_) & NIR_SPARSE_BIT_INVERTED;
 
    b->cursor = nir_before_instr(&intr->instr);
+   nir_def *code = intr->src[0].ssa;
+
+   if (bit != NIR_SPARSE_BIT_ALL) {
+      nir_def *mask = nir_imm_int(b, 1);
+
+      if (bit == NIR_SPARSE_BIT_SUBGROUP_INVOCATION) {
+         mask = nir_ishl(b, mask, nir_load_subgroup_invocation(b));
+      }
+
+      code = nir_iand(b, code, mask);
+   }
+
    nir_def *repl = NULL;
-
-   switch (intr->intrinsic) {
-   case nir_intrinsic_is_sparse_texels_resident: {
-      nir_def *code = intr->src[0].ssa;
-
-      if (bit != NIR_SPARSE_BIT_ALL) {
-         nir_def *mask = nir_imm_int(b, 1);
-
-         if (bit == NIR_SPARSE_BIT_SUBGROUP_INVOCATION) {
-            mask = nir_ishl(b, mask, nir_load_subgroup_invocation(b));
-         }
-
-         code = nir_iand(b, code, mask);
-      }
-
-      if (inverted) {
-         repl = nir_ieq_imm(b, code, 0);
-      } else {
-         repl = nir_ine_imm(b, code, 0);
-      }
-      break;
-   }
-
-   case nir_intrinsic_sparse_residency_code_and: {
-      nir_op op = inverted ? nir_op_ior : nir_op_iand;
-      repl = nir_build_alu2(b, op, intr->src[0].ssa, intr->src[1].ssa);
-      break;
-   }
-
-   default:
-      return false;
+   if (inverted) {
+      repl = nir_ieq_imm(b, code, 0);
+   } else {
+      repl = nir_ine_imm(b, code, 0);
    }
 
    nir_def_replace(&intr->def, repl);
