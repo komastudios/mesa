@@ -9,6 +9,12 @@ use nak_bindings::*;
 
 pub use crate::builder::{Builder, InstrBuilder, SSABuilder, SSAInstrBuilder};
 use crate::legalize::LegalizeBuilder;
+use crate::parser::{
+    delimited, line_comment, many0, one_of, preceded, preceded_unique,
+    separated_list0, separated_list1, separated_list_m, tag, whitespace,
+    ErrorKind, OptionalPermutation, PResult, ParseAndExt, ParseOrExt, Parser,
+    WithDefaultParser,
+};
 use crate::sph::{OutputTopology, PixelImap};
 use compiler::as_slice::*;
 use compiler::cfg::CFG;
@@ -29,6 +35,14 @@ pub struct Label {
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "L{}", self.idx)
+    }
+}
+
+impl WithDefaultParser for Label {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        preceded(tag("L"), u32::parse)
+            .map(|idx| Label { idx })
+            .parse(input)
     }
 }
 
@@ -158,6 +172,20 @@ impl RegFile {
             RegFile::Bar => "b",
             RegFile::Mem => "m",
         }
+    }
+
+    fn parse_prefix<'a>(input: &'a str) -> PResult<'a, Self> {
+        (
+            tag("r").map(|_| RegFile::GPR),
+            tag("ur").map(|_| RegFile::UGPR),
+            tag("p").map(|_| RegFile::Pred),
+            tag("up").map(|_| RegFile::UPred),
+            tag("c").map(|_| RegFile::Carry),
+            tag("b").map(|_| RegFile::Bar),
+            tag("m").map(|_| RegFile::Mem),
+        )
+            .or()
+            .parse(input)
     }
 }
 
@@ -411,6 +439,15 @@ impl fmt::Display for SSAValue {
     }
 }
 
+impl WithDefaultParser for SSAValue {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        tag("%")
+            .and(RegFile::parse_prefix.and(u32::parse))
+            .map(|(_, (f, id))| SSAValue::new(f, id))
+            .parse(input)
+    }
+}
+
 /// A reference to one or more SSA values
 ///
 /// Because each SSA value represents a single 1 or 32-bit scalar, we need a way
@@ -572,6 +609,21 @@ impl fmt::Display for SSARef {
     }
 }
 
+impl WithDefaultParser for SSARef {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        SSAValue::parse
+            .map(|x| x.into())
+            .or(separated_list1(SSAValue::parse, whitespace).and_then(|x| {
+                SSARef::try_from(x.as_slice()).map_err(|_| {
+                    ErrorKind::CustomErr(
+                        "SSA reference must have 1 to 4 components",
+                    )
+                })
+            }))
+            .parse(input)
+    }
+}
+
 pub struct SSAValueAllocator {
     count: u32,
 }
@@ -671,8 +723,36 @@ impl fmt::Display for RegRef {
     }
 }
 
-#[derive(Clone, Copy)]
+impl WithDefaultParser for RegRef {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        (
+            RegFile::parse_prefix,
+            u32::parse,
+            preceded(tag(".."), u8::parse).opt(),
+        )
+            .and()
+            .and_then(|(file, base_idx, idx)| {
+                let idx = idx.map(|x| x as u32).unwrap_or(base_idx + 1);
+                if idx <= base_idx {
+                    return Err(ErrorKind::CustomErr(
+                        "Register reference must have at least one component",
+                    ));
+                }
+                let comps = idx - base_idx;
+                if comps > 8 {
+                    return Err(ErrorKind::CustomErr(
+                        "Register reference must have at most 8 components",
+                    ));
+                }
+                Ok(RegRef::new(file, base_idx, comps as u8))
+            })
+            .parse(input)
+    }
+}
+
+#[derive(Clone, Copy, EnumDisplay, EnumParse)]
 pub enum Dst {
+    #[format("null")]
     None,
     SSA(SSARef),
     Reg(RegRef),
@@ -712,6 +792,22 @@ impl Dst {
         }
         .iter_mut()
     }
+
+    pub fn is_predicate(&self) -> bool {
+        match self {
+            Dst::None => false,
+            Dst::SSA(ssa) => ssa.is_predicate(),
+            Dst::Reg(reg) => reg.is_predicate(),
+        }
+    }
+
+    pub fn is_gpr(&self) -> bool {
+        match self {
+            Dst::None => false,
+            Dst::SSA(ssa) => ssa.is_gpr(),
+            Dst::Reg(reg) => reg.is_gpr(),
+        }
+    }
 }
 
 impl From<RegRef> for Dst {
@@ -723,17 +819,6 @@ impl From<RegRef> for Dst {
 impl<T: Into<SSARef>> From<T> for Dst {
     fn from(ssa: T) -> Dst {
         Dst::SSA(ssa.into())
-    }
-}
-
-impl fmt::Display for Dst {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Dst::None => write!(f, "null")?,
-            Dst::SSA(v) => v.fmt(f)?,
-            Dst::Reg(r) => r.fmt(f)?,
-        }
-        Ok(())
     }
 }
 
@@ -758,6 +843,21 @@ impl fmt::Display for CBuf {
     }
 }
 
+impl WithDefaultParser for CBuf {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        delimited(tag("c["), u8::parse, tag("]"))
+            .map(|b| CBuf::Binding(b))
+            .or(delimited(
+                tag("cx["),
+                SSARef::parse
+                    .map(|x| CBuf::BindlessSSA(x))
+                    .or(RegRef::parse.map(|x| CBuf::BindlessUGPR(x))),
+                tag("]"),
+            ))
+            .parse(input)
+    }
+}
+
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct CBufRef {
     pub buf: CBuf,
@@ -776,6 +876,15 @@ impl CBufRef {
 impl fmt::Display for CBufRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}[{:#x}]", self.buf, self.offset)
+    }
+}
+
+impl WithDefaultParser for CBufRef {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        CBuf::parse
+            .and(delimited(tag("["), u16::parse, tag("]")))
+            .map(|(buf, offset)| CBufRef { buf, offset })
+            .parse(input)
     }
 }
 
@@ -962,6 +1071,22 @@ impl fmt::Display for SrcRef {
     }
 }
 
+impl WithDefaultParser for SrcRef {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        (
+            tag("rZ").map(|_| SrcRef::Zero),
+            tag("pT").map(|_| SrcRef::True),
+            tag("pF").map(|_| SrcRef::False),
+            u32::parse.map(|x| SrcRef::Imm32(x)),
+            CBufRef::parse.map(|b| SrcRef::CBuf(b)),
+            SSARef::parse.map(|b| SrcRef::SSA(b)),
+            RegRef::parse.map(|r| SrcRef::Reg(r)),
+        )
+            .or()
+            .parse(input)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum SrcMod {
     None,
@@ -1056,9 +1181,10 @@ impl SrcMod {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, ModifierDisplay, ModifierParse)]
 #[allow(dead_code)]
 pub enum SrcSwizzle {
+    #[modifier(default)]
     None,
     Xx,
     Yy,
@@ -1067,16 +1193,6 @@ pub enum SrcSwizzle {
 impl SrcSwizzle {
     pub fn is_none(&self) -> bool {
         matches!(self, SrcSwizzle::None)
-    }
-}
-
-impl fmt::Display for SrcSwizzle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SrcSwizzle::None => Ok(()),
-            SrcSwizzle::Xx => write!(f, ".xx"),
-            SrcSwizzle::Yy => write!(f, ".yy"),
-        }
     }
 }
 
@@ -1378,6 +1494,40 @@ impl Src {
             SrcType::Bar => self.src_mod.is_none() && self.src_ref.is_barrier(),
         }
     }
+
+    pub fn parse<'a>(ty: SrcType) -> impl Fn(&'a str) -> PResult<'a, Self> {
+        let inner = || {
+            SrcRef::parse.and(SrcSwizzle::parse).map(
+                |(src_ref, src_swizzle)| Src {
+                    src_ref,
+                    src_mod: SrcMod::None,
+                    src_swizzle,
+                },
+            )
+        };
+        let abs = delimited(tag("|"), inner(), tag("|")).map(|x| x.fabs());
+        let negabs =
+            delimited(tag("-|"), inner(), tag("|")).map(|x| x.fabs().fneg());
+        let bnot = preceded(tag("!"), inner()).map(|x| x.bnot());
+        let ifnot = preceded(tag("-"), inner()).map(move |x| {
+            if matches!(
+                ty,
+                SrcType::F16 | SrcType::F16v2 | SrcType::F32 | SrcType::F64
+            ) {
+                x.fneg()
+            } else {
+                x.ineg()
+            }
+        });
+        (abs, negabs, bnot, ifnot).or().and_then(move |x| {
+            if !x.supports_type(&ty) {
+                return Err(ErrorKind::CustomErr(
+                    "Unsupported src-modifier combo",
+                ));
+            }
+            Ok(x)
+        })
+    }
 }
 
 impl<T: Into<SrcRef>> From<T> for Src {
@@ -1405,6 +1555,15 @@ impl fmt::Display for Src {
     }
 }
 
+/// Metadata for source registers
+/// SSA | GPR -> must not have modifiers
+/// ALU -> SRC can only be CBuf, Imm, or GPR mut not have modifiers.
+/// F* -> FNeg FAbs FNegAbs
+/// I* -> INeg
+/// B32 -> BNot, must be a register
+/// Pred -> BNot, must be predicate
+/// Carry, Bar -> Special types, do not support modifiers
+/// Also documented in Src::supports_type
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SrcType {
@@ -1702,7 +1861,35 @@ macro_rules! impl_display_for_op {
     };
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct FmtAddr {
+    src: Src,
+    off: i32,
+}
+
+impl fmt::Display for FmtAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let FmtAddr { src, off } = *self;
+        match (src.is_zero(), off) {
+            (true, n) => write!(f, "[{n}]"),
+            (false, 0) => write!(f, "[{src}]"),
+            (false, n) if n > 0 => write!(f, "[{src}+{n}]"),
+            (false, n) => write!(f, "[{src}{n}]"),
+        }?;
+        Ok(())
+    }
+}
+
+impl WithDefaultParser for FmtAddr {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        let inner = Src::parse(SrcType::GPR).opt().and(i32::parse.opt());
+        let (rest, (src, off)) = delimited(tag("["), inner, tag("]"))(input)?;
+        let src = src.unwrap_or(Src::new_zero());
+        let off = off.unwrap_or(0);
+        Ok((rest, FmtAddr { src, off }))
+    }
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum PredSetOp {
     And,
     Or,
@@ -1731,32 +1918,36 @@ impl PredSetOp {
     }
 }
 
-impl fmt::Display for PredSetOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PredSetOp::And => write!(f, ".and"),
-            PredSetOp::Or => write!(f, ".or"),
-            PredSetOp::Xor => write!(f, ".xor"),
-        }
-    }
-}
-
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum FloatCmpOp {
+    #[modifier("eq")]
     OrdEq,
+    #[modifier("ne")]
     OrdNe,
+    #[modifier("lt")]
     OrdLt,
+    #[modifier("le")]
     OrdLe,
+    #[modifier("gt")]
     OrdGt,
+    #[modifier("ge")]
     OrdGe,
+    #[modifier("equ")]
     UnordEq,
+    #[modifier("neu")]
     UnordNe,
+    #[modifier("ltu")]
     UnordLt,
+    #[modifier("leu")]
     UnordLe,
+    #[modifier("gtu")]
     UnordGt,
+    #[modifier("geu")]
     UnordGe,
+    #[modifier("num")]
     IsNum,
+    #[modifier("nan")]
     IsNan,
 }
 
@@ -1778,28 +1969,7 @@ impl FloatCmpOp {
     }
 }
 
-impl fmt::Display for FloatCmpOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FloatCmpOp::OrdEq => write!(f, ".eq"),
-            FloatCmpOp::OrdNe => write!(f, ".ne"),
-            FloatCmpOp::OrdLt => write!(f, ".lt"),
-            FloatCmpOp::OrdLe => write!(f, ".le"),
-            FloatCmpOp::OrdGt => write!(f, ".gt"),
-            FloatCmpOp::OrdGe => write!(f, ".ge"),
-            FloatCmpOp::UnordEq => write!(f, ".equ"),
-            FloatCmpOp::UnordNe => write!(f, ".neu"),
-            FloatCmpOp::UnordLt => write!(f, ".ltu"),
-            FloatCmpOp::UnordLe => write!(f, ".leu"),
-            FloatCmpOp::UnordGt => write!(f, ".gtu"),
-            FloatCmpOp::UnordGe => write!(f, ".geu"),
-            FloatCmpOp::IsNum => write!(f, ".num"),
-            FloatCmpOp::IsNan => write!(f, ".nan"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum IntCmpOp {
     Eq,
     Ne,
@@ -1821,20 +1991,7 @@ impl IntCmpOp {
     }
 }
 
-impl fmt::Display for IntCmpOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            IntCmpOp::Eq => write!(f, ".eq"),
-            IntCmpOp::Ne => write!(f, ".ne"),
-            IntCmpOp::Lt => write!(f, ".lt"),
-            IntCmpOp::Le => write!(f, ".le"),
-            IntCmpOp::Gt => write!(f, ".gt"),
-            IntCmpOp::Ge => write!(f, ".ge"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum IntCmpType {
     U32,
     I32,
@@ -1850,32 +2007,12 @@ impl IntCmpType {
     }
 }
 
-impl fmt::Display for IntCmpType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            IntCmpType::U32 => write!(f, ".u32"),
-            IntCmpType::I32 => write!(f, ".i32"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum LogicOp2 {
     And,
     Or,
     Xor,
     PassB,
-}
-
-impl fmt::Display for LogicOp2 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LogicOp2::And => write!(f, "and"),
-            LogicOp2::Or => write!(f, "or"),
-            LogicOp2::Xor => write!(f, "xor"),
-            LogicOp2::PassB => write!(f, "pass_b"),
-        }
-    }
 }
 
 impl LogicOp2 {
@@ -1983,7 +2120,15 @@ impl fmt::Display for LogicOp3 {
     }
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+impl WithDefaultParser for LogicOp3 {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        delimited(tag("LUT["), u8::parse, tag("]"))
+            .map(|lut| LogicOp3 { lut })
+            .parse(input)
+    }
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum FloatType {
     F16,
     F32,
@@ -2009,33 +2154,16 @@ impl FloatType {
     }
 }
 
-impl fmt::Display for FloatType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FloatType::F16 => write!(f, ".f16"),
-            FloatType::F32 => write!(f, ".f32"),
-            FloatType::F64 => write!(f, ".f64"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum FRndMode {
+    #[modifier("re")]
     NearestEven,
+    #[modifier("rm")]
     NegInf,
+    #[modifier("rp")]
     PosInf,
+    #[modifier("rz")]
     Zero,
-}
-
-impl fmt::Display for FRndMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FRndMode::NearestEven => write!(f, ".re"),
-            FRndMode::NegInf => write!(f, ".rm"),
-            FRndMode::PosInf => write!(f, ".rp"),
-            FRndMode::Zero => write!(f, ".rz"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -2064,96 +2192,92 @@ impl fmt::Display for TexRef {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+impl WithDefaultParser for TexRef {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        (
+            delimited(tag("tex["), u16::parse, tag("]"))
+                .map(|x| TexRef::Bound(x)),
+            (tag("c["), u8::parse, tag("]["), u16::parse, tag("]"))
+                .and()
+                .map(|(_, idx, _, offset, _)| {
+                    TexRef::CBuf(TexCBufRef { idx, offset })
+                }),
+            tag("bindless").map(|_| TexRef::Bindless),
+        )
+            .or()
+            .parse(input)
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum TexDim {
+    #[modifier("1d")]
     _1D,
+    #[modifier("a1d")]
     Array1D,
     _2D,
+    #[modifier("2d")]
     Array2D,
     _3D,
+    #[modifier("3d")]
     Cube,
+    #[modifier("acube")]
     ArrayCube,
 }
 
-impl fmt::Display for TexDim {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TexDim::_1D => write!(f, ".1d"),
-            TexDim::Array1D => write!(f, ".a1d"),
-            TexDim::_2D => write!(f, ".2d"),
-            TexDim::Array2D => write!(f, ".a2d"),
-            TexDim::_3D => write!(f, ".3d"),
-            TexDim::Cube => write!(f, ".cube"),
-            TexDim::ArrayCube => write!(f, ".acube"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum TexLodMode {
+    #[modifier("la")]
     Auto,
+    #[modifier("lz")]
     Zero,
+    #[modifier("lb")]
     Bias,
+    #[modifier("ll")]
     Lod,
+    #[modifier("lc")]
     Clamp,
+    #[modifier("lb.lc")]
     BiasClamp,
 }
 
-impl fmt::Display for TexLodMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TexLodMode::Auto => write!(f, "la"),
-            TexLodMode::Zero => write!(f, "lz"),
-            TexLodMode::Bias => write!(f, "lb"),
-            TexLodMode::Lod => write!(f, "ll"),
-            TexLodMode::Clamp => write!(f, "lc"),
-            TexLodMode::BiasClamp => write!(f, "lb.lc"),
-        }
+impl Default for TexLodMode {
+    fn default() -> Self {
+        TexLodMode::Auto
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum Tld4OffsetMode {
+    #[modifier("no_off")]
     None,
+    #[modifier("aoffi")]
     AddOffI,
+    #[modifier("ptp")]
     PerPx,
 }
 
-impl fmt::Display for Tld4OffsetMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Tld4OffsetMode::None => write!(f, "no_off"),
-            Tld4OffsetMode::AddOffI => write!(f, "aoffi"),
-            Tld4OffsetMode::PerPx => write!(f, "ptp"),
-        }
-    }
-}
-
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum TexQuery {
     Dimension,
     TextureType,
     SamplerPos,
 }
 
-impl fmt::Display for TexQuery {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TexQuery::Dimension => write!(f, "dimension"),
-            TexQuery::TextureType => write!(f, "texture_type"),
-            TexQuery::SamplerPos => write!(f, "sampler_pos"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum ImageDim {
+    #[modifier("1d")]
     _1D,
+    #[modifier("buf")]
     _1DBuffer,
+    #[modifier("a1d")]
     _1DArray,
+    #[modifier("2d")]
     _2D,
+    #[modifier("a2d")]
     _2DArray,
+    #[modifier("3d")]
     _3D,
 }
 
@@ -2170,20 +2294,9 @@ impl ImageDim {
     }
 }
 
-impl fmt::Display for ImageDim {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ImageDim::_1D => write!(f, ".1d"),
-            ImageDim::_1DBuffer => write!(f, ".buf"),
-            ImageDim::_1DArray => write!(f, ".a1d"),
-            ImageDim::_2D => write!(f, ".2d"),
-            ImageDim::_2DArray => write!(f, ".a2d"),
-            ImageDim::_3D => write!(f, ".3d"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse,
+)]
 pub enum IntType {
     U8,
     I8,
@@ -2247,37 +2360,13 @@ impl IntType {
     }
 }
 
-impl fmt::Display for IntType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            IntType::U8 => write!(f, ".u8"),
-            IntType::I8 => write!(f, ".i8"),
-            IntType::U16 => write!(f, ".u16"),
-            IntType::I16 => write!(f, ".i16"),
-            IntType::U32 => write!(f, ".u32"),
-            IntType::I32 => write!(f, ".i32"),
-            IntType::U64 => write!(f, ".u64"),
-            IntType::I64 => write!(f, ".i64"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum MemAddrType {
     A32,
     A64,
 }
 
-impl fmt::Display for MemAddrType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemAddrType::A32 => write!(f, ".a32"),
-            MemAddrType::A64 => write!(f, ".a64"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum MemType {
     U8,
     I8,
@@ -2324,57 +2413,26 @@ impl MemType {
     }
 }
 
-impl fmt::Display for MemType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemType::U8 => write!(f, ".u8"),
-            MemType::I8 => write!(f, ".i8"),
-            MemType::U16 => write!(f, ".u16"),
-            MemType::I16 => write!(f, ".i16"),
-            MemType::B32 => write!(f, ".b32"),
-            MemType::B64 => write!(f, ".b64"),
-            MemType::B128 => write!(f, ".b128"),
-        }
-    }
-}
-
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum MemOrder {
     Constant,
     Weak,
+    #[modifier(prefix_name)]
     Strong(MemScope),
 }
 
-impl fmt::Display for MemOrder {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemOrder::Constant => write!(f, ".constant"),
-            MemOrder::Weak => write!(f, ".weak"),
-            MemOrder::Strong(scope) => write!(f, ".strong{}", scope),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum MemScope {
     CTA,
     GPU,
+    #[modifier("sys")]
     System,
 }
 
-impl fmt::Display for MemScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemScope::CTA => write!(f, ".cta"),
-            MemScope::GPU => write!(f, ".gpu"),
-            MemScope::System => write!(f, ".sys"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum MemSpace {
+    #[modifier(prefix_name)]
     Global(MemAddrType),
     Local,
     Shared,
@@ -2390,38 +2448,21 @@ impl MemSpace {
     }
 }
 
-impl fmt::Display for MemSpace {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemSpace::Global(t) => write!(f, ".global{t}"),
-            MemSpace::Local => write!(f, ".local"),
-            MemSpace::Shared => write!(f, ".shared"),
-        }
-    }
-}
-
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum MemEvictionPriority {
+    #[modifier("ef")]
     First,
+    #[modifier(default)]
     Normal,
+    #[modifier("el")]
     Last,
+    #[modifier("lu")]
     LastUse,
+    #[modifier("eu")]
     Unchanged,
+    #[modifier("na")]
     NoAllocate,
-}
-
-impl fmt::Display for MemEvictionPriority {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemEvictionPriority::First => write!(f, ".ef"),
-            MemEvictionPriority::Normal => Ok(()),
-            MemEvictionPriority::Last => write!(f, ".el"),
-            MemEvictionPriority::LastUse => write!(f, ".lu"),
-            MemEvictionPriority::Unchanged => write!(f, ".eu"),
-            MemEvictionPriority::NoAllocate => write!(f, ".na"),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -2442,8 +2483,27 @@ impl fmt::Display for MemAccess {
     }
 }
 
+impl WithDefaultParser for MemAccess {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        (
+            MemType::parse,
+            MemSpace::parse,
+            MemOrder::parse,
+            MemEvictionPriority::parse,
+        )
+            .and()
+            .map(|(mem_type, space, order, eviction_priority)| MemAccess {
+                mem_type,
+                space,
+                order,
+                eviction_priority,
+            })
+            .parse(input)
+    }
+}
+
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum AtomType {
     F16x2,
     U32,
@@ -2489,30 +2549,18 @@ impl AtomType {
     }
 }
 
-impl fmt::Display for AtomType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AtomType::F16x2 => write!(f, ".f16x2"),
-            AtomType::U32 => write!(f, ".u32"),
-            AtomType::I32 => write!(f, ".i32"),
-            AtomType::F32 => write!(f, ".f32"),
-            AtomType::U64 => write!(f, ".u64"),
-            AtomType::I64 => write!(f, ".i64"),
-            AtomType::F64 => write!(f, ".f64"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum AtomCmpSrc {
     /// The cmpr value is passed as a separate source
+    #[modifier("cmpexch")]
     Separate,
     /// The cmpr value is packed in with the data with cmpr coming first
+    #[modifier("cmpexch.packed")]
     Packed,
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum AtomOp {
     Add,
     Min,
@@ -2542,25 +2590,7 @@ impl AtomOp {
     }
 }
 
-impl fmt::Display for AtomOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AtomOp::Add => write!(f, ".add"),
-            AtomOp::Min => write!(f, ".min"),
-            AtomOp::Max => write!(f, ".max"),
-            AtomOp::Inc => write!(f, ".inc"),
-            AtomOp::Dec => write!(f, ".dec"),
-            AtomOp::And => write!(f, ".and"),
-            AtomOp::Or => write!(f, ".or"),
-            AtomOp::Xor => write!(f, ".xor"),
-            AtomOp::Exch => write!(f, ".exch"),
-            AtomOp::CmpExch(AtomCmpSrc::Separate) => write!(f, ".cmpexch"),
-            AtomOp::CmpExch(AtomCmpSrc::Packed) => write!(f, ".cmpexch.packed"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum InterpFreq {
     Pass,
     PassMulW,
@@ -2568,31 +2598,12 @@ pub enum InterpFreq {
     State,
 }
 
-impl fmt::Display for InterpFreq {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InterpFreq::Pass => write!(f, ".pass"),
-            InterpFreq::PassMulW => write!(f, ".pass_mul_w"),
-            InterpFreq::Constant => write!(f, ".constant"),
-            InterpFreq::State => write!(f, ".state"),
-        }
-    }
-}
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum InterpLoc {
+    #[modifier(default)]
     Default,
     Centroid,
     Offset,
-}
-
-impl fmt::Display for InterpLoc {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InterpLoc::Default => Ok(()),
-            InterpLoc::Centroid => write!(f, ".centroid"),
-            InterpLoc::Offset => write!(f, ".offset"),
-        }
-    }
 }
 
 pub struct AttrAccess {
@@ -2604,7 +2615,7 @@ pub struct AttrAccess {
 }
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpFAdd {
     #[dst_type(F32)]
     pub dst: Dst,
@@ -2612,28 +2623,18 @@ pub struct OpFAdd {
     #[src_type(F32)]
     pub srcs: [Src; 2],
 
+    #[modifier(".sat")]
     pub saturate: bool,
+    #[modifier(def = FRndMode::NearestEven)]
     pub rnd_mode: FRndMode,
+    #[modifier]
     pub ftz: bool,
 }
 
-impl DisplayOp for OpFAdd {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sat = if self.saturate { ".sat" } else { "" };
-        write!(f, "fadd{sat}")?;
-        if self.rnd_mode != FRndMode::NearestEven {
-            write!(f, "{}", self.rnd_mode)?;
-        }
-        if self.ftz {
-            write!(f, ".ftz")?;
-        }
-        write!(f, " {} {}", self.srcs[0], self.srcs[1],)
-    }
-}
 impl_display_for_op!(OpFAdd);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpFFma {
     #[dst_type(F32)]
     pub dst: Dst,
@@ -2641,31 +2642,20 @@ pub struct OpFFma {
     #[src_type(F32)]
     pub srcs: [Src; 3],
 
+    #[modifier(".sat")]
     pub saturate: bool,
+    #[modifier(def = FRndMode::NearestEven)]
     pub rnd_mode: FRndMode,
+    #[modifier]
     pub ftz: bool,
+    #[modifier]
     pub dnz: bool,
 }
 
-impl DisplayOp for OpFFma {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sat = if self.saturate { ".sat" } else { "" };
-        write!(f, "ffma{sat}")?;
-        if self.rnd_mode != FRndMode::NearestEven {
-            write!(f, "{}", self.rnd_mode)?;
-        }
-        if self.dnz {
-            write!(f, ".dnz")?;
-        } else if self.ftz {
-            write!(f, ".ftz")?;
-        }
-        write!(f, " {} {} {}", self.srcs[0], self.srcs[1], self.srcs[2])
-    }
-}
 impl_display_for_op!(OpFFma);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpFMnMx {
     #[dst_type(F32)]
     pub dst: Dst,
@@ -2676,23 +2666,14 @@ pub struct OpFMnMx {
     #[src_type(Pred)]
     pub min: Src,
 
+    #[modifier]
     pub ftz: bool,
 }
 
-impl DisplayOp for OpFMnMx {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ftz = if self.ftz { ".ftz" } else { "" };
-        write!(
-            f,
-            "fmnmx{ftz} {} {} {}",
-            self.srcs[0], self.srcs[1], self.min
-        )
-    }
-}
 impl_display_for_op!(OpFMnMx);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpFMul {
     #[dst_type(F32)]
     pub dst: Dst,
@@ -2700,53 +2681,34 @@ pub struct OpFMul {
     #[src_type(F32)]
     pub srcs: [Src; 2],
 
+    #[modifier(".sat")]
     pub saturate: bool,
+    #[modifier(def = FRndMode::NearestEven)]
     pub rnd_mode: FRndMode,
+    #[modifier]
     pub ftz: bool,
+    #[modifier]
     pub dnz: bool,
 }
 
-impl DisplayOp for OpFMul {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sat = if self.saturate { ".sat" } else { "" };
-        write!(f, "fmul{sat}")?;
-        if self.rnd_mode != FRndMode::NearestEven {
-            write!(f, "{}", self.rnd_mode)?;
-        }
-        if self.dnz {
-            write!(f, ".dnz")?;
-        } else if self.ftz {
-            write!(f, ".ftz")?;
-        }
-        write!(f, " {} {}", self.srcs[0], self.srcs[1],)
-    }
-}
 impl_display_for_op!(OpFMul);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpFSet {
     #[dst_type(F32)]
     pub dst: Dst,
 
+    #[modifier]
     pub cmp_op: FloatCmpOp,
 
     #[src_type(F32)]
     pub srcs: [Src; 2],
 
+    #[modifier]
     pub ftz: bool,
 }
 
-impl DisplayOp for OpFSet {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ftz = if self.ftz { ".ftz" } else { "" };
-        write!(
-            f,
-            "fset{}{ftz} {} {}",
-            self.cmp_op, self.srcs[0], self.srcs[1]
-        )
-    }
-}
 impl_display_for_op!(OpFSet);
 
 #[repr(C)]
@@ -2781,26 +2743,53 @@ impl DisplayOp for OpFSetP {
         Ok(())
     }
 }
+
+impl WithDefaultParser for OpFSetP {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        let dst = delimited(whitespace, Dst::parse, whitespace.and(tag("=")));
+        let mods = (
+            FloatCmpOp::parse,
+            tag(".ftz").opt().map(|x| x.is_some()),
+            PredSetOp::parse.opt(),
+        )
+            .and();
+        let srcs = (
+            preceded(whitespace, Src::parse(SrcType::F32)),
+            preceded(whitespace, Src::parse(SrcType::F32)),
+            preceded(whitespace, Src::parse(SrcType::Pred)).opt(),
+        )
+            .and();
+
+        let op = preceded_unique(whitespace.and(tag("fsetp")), mods.and(srcs));
+
+        dst.and(op).and_then(|(dst, ((cmp_op, ftz, set_op), (src1, src2, accum)))| {
+            if matches!((set_op, accum), (Some(_), None) | (None, Some(_))) {
+                return Err(ErrorKind::CustomErr("accumulator and set_op must be both present or both absent"));
+            }
+
+            Ok(OpFSetP {
+                dst,
+                cmp_op,
+                set_op: set_op.unwrap_or(PredSetOp::And),
+                srcs: [src1, src2],
+                accum: accum.unwrap_or(false.into()),
+                ftz,
+            })
+        }).parse(input)
+    }
+}
 impl_display_for_op!(OpFSetP);
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, EnumDisplay, EnumParse)]
 pub enum FSwzAddOp {
     Add,
+    #[format("subr")]
     SubRight,
+    #[format("sub")]
     SubLeft,
+    #[format("mov2")]
     MoveLeft,
-}
-
-impl fmt::Display for FSwzAddOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FSwzAddOp::Add => write!(f, "add"),
-            FSwzAddOp::SubRight => write!(f, "subr"),
-            FSwzAddOp::SubLeft => write!(f, "sub"),
-            FSwzAddOp::MoveLeft => write!(f, "mov2"),
-        }
-    }
 }
 
 #[repr(C)]
@@ -2839,46 +2828,76 @@ impl DisplayOp for OpFSwzAdd {
         )
     }
 }
+impl WithDefaultParser for OpFSwzAdd {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        let dst = delimited(whitespace, Dst::parse, whitespace.and(tag("=")));
+        let mods = OptionalPermutation((FRndMode::parse, tag(".ftz"))).map(
+            |(rnd, ftz)| (rnd.unwrap_or(FRndMode::NearestEven), ftz.is_some()),
+        );
+
+        let srcs = (
+            preceded(whitespace, Src::parse(SrcType::GPR)),
+            preceded(whitespace, Src::parse(SrcType::GPR)),
+        )
+            .and();
+        let ops = delimited(
+            whitespace.and(tag("[")),
+            separated_list0(
+                FSwzAddOp::parse,
+                whitespace.and(tag(",")).and(whitespace),
+            ),
+            tag("]"),
+        )
+        .and_then(|x| {
+            x.try_into().map_err(|_| {
+                ErrorKind::CustomErr("Instr only supports 4 operand")
+            })
+        });
+        let op = preceded_unique(
+            whitespace.and(tag("fswzadd")),
+            (mods, srcs, ops).and(),
+        );
+
+        dst.and(op)
+            .map(|(dst, ((rnd_mode, ftz), (src1, src2), ops))| OpFSwzAdd {
+                dst,
+                srcs: [src1, src2],
+                ops,
+                rnd_mode,
+                ftz,
+            })
+            .parse(input)
+    }
+}
 impl_display_for_op!(OpFSwzAdd);
 
+#[derive(ModifierDisplay, ModifierParse)]
 pub enum RroOp {
+    #[modifier("sincos")]
     SinCos,
     Exp2,
-}
-
-impl fmt::Display for RroOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RroOp::SinCos => write!(f, ".sincos"),
-            RroOp::Exp2 => write!(f, ".exp2"),
-        }
-    }
 }
 
 /// MuFu range reduction operator
 ///
 /// Not available on SM70+
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpRro {
     #[dst_type(F32)]
     pub dst: Dst,
 
+    #[modifier]
     pub op: RroOp,
 
     #[src_type(F32)]
     pub src: Src,
 }
 
-impl DisplayOp for OpRro {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "rro{} {}", self.op, self.src)
-    }
-}
 impl_display_for_op!(OpRro);
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum MuFuOp {
     Cos,
     Sin,
@@ -2892,44 +2911,24 @@ pub enum MuFuOp {
     Tanh,
 }
 
-impl fmt::Display for MuFuOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MuFuOp::Cos => write!(f, "cos"),
-            MuFuOp::Sin => write!(f, "sin"),
-            MuFuOp::Exp2 => write!(f, "exp2"),
-            MuFuOp::Log2 => write!(f, "log2"),
-            MuFuOp::Rcp => write!(f, "rcp"),
-            MuFuOp::Rsq => write!(f, "rsq"),
-            MuFuOp::Rcp64H => write!(f, "rcp64h"),
-            MuFuOp::Rsq64H => write!(f, "rsq64h"),
-            MuFuOp::Sqrt => write!(f, "sqrt"),
-            MuFuOp::Tanh => write!(f, "tanh"),
-        }
-    }
-}
-
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
+#[display_op(format = "mufu.")]
 pub struct OpMuFu {
     #[dst_type(F32)]
     pub dst: Dst,
 
+    #[modifier]
     pub op: MuFuOp,
 
     #[src_type(F32)]
     pub src: Src,
 }
 
-impl DisplayOp for OpMuFu {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "mufu.{} {}", self.op, self.src)
-    }
-}
 impl_display_for_op!(OpMuFu);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpDAdd {
     #[dst_type(F64)]
     pub dst: Dst,
@@ -2937,22 +2936,14 @@ pub struct OpDAdd {
     #[src_type(F64)]
     pub srcs: [Src; 2],
 
+    #[modifier(def = FRndMode::NearestEven)]
     pub rnd_mode: FRndMode,
 }
 
-impl DisplayOp for OpDAdd {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "dadd")?;
-        if self.rnd_mode != FRndMode::NearestEven {
-            write!(f, "{}", self.rnd_mode)?;
-        }
-        write!(f, " {} {}", self.srcs[0], self.srcs[1],)
-    }
-}
 impl_display_for_op!(OpDAdd);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpDMul {
     #[dst_type(F64)]
     pub dst: Dst,
@@ -2960,22 +2951,14 @@ pub struct OpDMul {
     #[src_type(F64)]
     pub srcs: [Src; 2],
 
+    #[modifier(def = FRndMode::NearestEven)]
     pub rnd_mode: FRndMode,
 }
 
-impl DisplayOp for OpDMul {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "dmul")?;
-        if self.rnd_mode != FRndMode::NearestEven {
-            write!(f, "{}", self.rnd_mode)?;
-        }
-        write!(f, " {} {}", self.srcs[0], self.srcs[1],)
-    }
-}
 impl_display_for_op!(OpDMul);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpDFma {
     #[dst_type(F64)]
     pub dst: Dst,
@@ -2983,22 +2966,14 @@ pub struct OpDFma {
     #[src_type(F64)]
     pub srcs: [Src; 3],
 
+    #[modifier(def = FRndMode::NearestEven)]
     pub rnd_mode: FRndMode,
 }
 
-impl DisplayOp for OpDFma {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "dfma")?;
-        if self.rnd_mode != FRndMode::NearestEven {
-            write!(f, "{}", self.rnd_mode)?;
-        }
-        write!(f, " {} {} {}", self.srcs[0], self.srcs[1], self.srcs[2])
-    }
-}
 impl_display_for_op!(OpDFma);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpDMnMx {
     #[dst_type(F64)]
     pub dst: Dst,
@@ -3010,11 +2985,6 @@ pub struct OpDMnMx {
     pub min: Src,
 }
 
-impl DisplayOp for OpDMnMx {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "dmnmx {} {} {}", self.srcs[0], self.srcs[1], self.min)
-    }
-}
 impl_display_for_op!(OpDMnMx);
 
 #[repr(C)]
@@ -3049,7 +3019,7 @@ impl DisplayOp for OpDSetP {
 impl_display_for_op!(OpDSetP);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpHAdd2 {
     #[dst_type(F16v2)]
     pub dst: Dst,
@@ -3057,22 +3027,14 @@ pub struct OpHAdd2 {
     #[src_type(F16v2)]
     pub srcs: [Src; 2],
 
+    #[modifier(".sat")]
     pub saturate: bool,
+    #[modifier(".ftz")]
     pub ftz: bool,
+    #[modifier(".f32")]
     pub f32: bool,
 }
 
-impl DisplayOp for OpHAdd2 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sat = if self.saturate { ".sat" } else { "" };
-        let f32 = if self.f32 { ".f32" } else { "" };
-        write!(f, "hadd2{sat}{f32}")?;
-        if self.ftz {
-            write!(f, ".ftz")?;
-        }
-        write!(f, " {} {}", self.srcs[0], self.srcs[1])
-    }
-}
 impl_display_for_op!(OpHAdd2);
 
 #[repr(C)]
@@ -3150,7 +3112,7 @@ impl DisplayOp for OpHSetP2 {
 impl_display_for_op!(OpHSetP2);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpHMul2 {
     #[dst_type(F16v2)]
     pub dst: Dst,
@@ -3158,27 +3120,18 @@ pub struct OpHMul2 {
     #[src_type(F16v2)]
     pub srcs: [Src; 2],
 
+    #[modifier(".sat")]
     pub saturate: bool,
+    #[modifier]
     pub ftz: bool,
+    #[modifier]
     pub dnz: bool,
 }
 
-impl DisplayOp for OpHMul2 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sat = if self.saturate { ".sat" } else { "" };
-        write!(f, "hmul2{sat}")?;
-        if self.dnz {
-            write!(f, ".dnz")?;
-        } else if self.ftz {
-            write!(f, ".ftz")?;
-        }
-        write!(f, " {} {}", self.srcs[0], self.srcs[1])
-    }
-}
 impl_display_for_op!(OpHMul2);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpHFma2 {
     #[dst_type(F16v2)]
     pub dst: Dst,
@@ -3186,29 +3139,20 @@ pub struct OpHFma2 {
     #[src_type(F16v2)]
     pub srcs: [Src; 3],
 
+    #[modifier(".sat")]
     pub saturate: bool,
+    #[modifier]
     pub ftz: bool,
+    #[modifier]
     pub dnz: bool,
+    #[modifier]
     pub f32: bool,
 }
 
-impl DisplayOp for OpHFma2 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let sat = if self.saturate { ".sat" } else { "" };
-        let f32 = if self.f32 { ".f32" } else { "" };
-        write!(f, "hfma2{sat}{f32}")?;
-        if self.dnz {
-            write!(f, ".dnz")?;
-        } else if self.ftz {
-            write!(f, ".ftz")?;
-        }
-        write!(f, " {} {} {}", self.srcs[0], self.srcs[1], self.srcs[2])
-    }
-}
 impl_display_for_op!(OpHFma2);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpHMnMx2 {
     #[dst_type(F16v2)]
     pub dst: Dst,
@@ -3219,23 +3163,14 @@ pub struct OpHMnMx2 {
     #[src_type(Pred)]
     pub min: Src,
 
+    #[modifier]
     pub ftz: bool,
 }
 
-impl DisplayOp for OpHMnMx2 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ftz = if self.ftz { ".ftz" } else { "" };
-        write!(
-            f,
-            "hmnmx2{ftz} {} {} {}",
-            self.srcs[0], self.srcs[1], self.min
-        )
-    }
-}
 impl_display_for_op!(OpHMnMx2);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBMsk {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3246,19 +3181,14 @@ pub struct OpBMsk {
     #[src_type(ALU)]
     pub width: Src,
 
+    #[modifier(".wrap", ".clamp")]
     pub wrap: bool,
 }
 
-impl DisplayOp for OpBMsk {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let wrap = if self.wrap { ".wrap" } else { ".clamp" };
-        write!(f, "bmsk{} {} {}", wrap, self.pos, self.width)
-    }
-}
 impl_display_for_op!(OpBMsk);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBRev {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3267,17 +3197,12 @@ pub struct OpBRev {
     pub src: Src,
 }
 
-impl DisplayOp for OpBRev {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "brev {}", self.src)
-    }
-}
 impl_display_for_op!(OpBRev);
 
 /// Bitfield extract. Extracts all bits from `base` starting at `offset` into
 /// `dst`.
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBfe {
     /// Where to insert the bits.
     #[dst_type(GPR)]
@@ -3299,28 +3224,18 @@ pub struct OpBfe {
     pub range: Src,
 
     /// Whether the output is signed
+    #[modifier(".s")]
     pub signed: bool,
 
     /// Whether to reverse the bits before inserting them into `dst`.
+    #[modifier(".rev")]
     pub reverse: bool,
 }
 
-impl DisplayOp for OpBfe {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bfe")?;
-        if self.signed {
-            write!(f, ".s")?;
-        }
-        if self.reverse {
-            write!(f, ".rev")?;
-        }
-        write!(f, " {} {}", self.base, self.range,)
-    }
-}
 impl_display_for_op!(OpBfe);
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpFlo {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3328,7 +3243,9 @@ pub struct OpFlo {
     #[src_type(ALU)]
     pub src: Src,
 
+    #[modifier(".s")]
     pub signed: bool,
+    #[modifier(".samt")]
     pub return_shift_amount: bool,
 }
 
@@ -3349,19 +3266,10 @@ impl Foldable for OpFlo {
     }
 }
 
-impl DisplayOp for OpFlo {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "flo")?;
-        if self.return_shift_amount {
-            write!(f, ".samt")?;
-        }
-        write!(f, " {}", self.src)
-    }
-}
 impl_display_for_op!(OpFlo);
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIAbs {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3378,16 +3286,11 @@ impl Foldable for OpIAbs {
     }
 }
 
-impl DisplayOp for OpIAbs {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "iabs {}", self.src)
-    }
-}
 impl_display_for_op!(OpIAbs);
 
 /// Only used on SM50
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIAdd2 {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3418,12 +3321,6 @@ impl Foldable for OpIAdd2 {
 
         f.set_u32_dst(self, &self.dst, sum as u32);
         f.set_carry_dst(self, &self.carry_out, sum >= (1 << 32));
-    }
-}
-
-impl DisplayOp for OpIAdd2 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "iadd2 {} {}", self.srcs[0], self.srcs[1])
     }
 }
 
@@ -3468,7 +3365,7 @@ impl DisplayOp for OpIAdd2X {
 }
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIAdd3 {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3505,19 +3402,10 @@ impl Foldable for OpIAdd3 {
     }
 }
 
-impl DisplayOp for OpIAdd3 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "iadd3 {} {} {}",
-            self.srcs[0], self.srcs[1], self.srcs[2],
-        )
-    }
-}
 impl_display_for_op!(OpIAdd3);
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIAdd3X {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3559,50 +3447,25 @@ impl Foldable for OpIAdd3X {
     }
 }
 
-impl DisplayOp for OpIAdd3X {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "iadd3.x {} {} {} {} {}",
-            self.srcs[0],
-            self.srcs[1],
-            self.srcs[2],
-            self.carry[0],
-            self.carry[1]
-        )
-    }
-}
 impl_display_for_op!(OpIAdd3X);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIDp4 {
     #[dst_type(GPR)]
     pub dst: Dst,
 
+    #[modifier]
     pub src_types: [IntType; 2],
 
     #[src_type(I32)]
     pub srcs: [Src; 3],
 }
 
-impl DisplayOp for OpIDp4 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "idp4{}{} {} {} {}",
-            self.src_types[0],
-            self.src_types[1],
-            self.srcs[0],
-            self.srcs[1],
-            self.srcs[2],
-        )
-    }
-}
 impl_display_for_op!(OpIDp4);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIMad {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3610,19 +3473,15 @@ pub struct OpIMad {
     #[src_type(ALU)]
     pub srcs: [Src; 3],
 
+    #[modifier(".s")]
     pub signed: bool,
 }
 
-impl DisplayOp for OpIMad {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "imad {} {} {}", self.srcs[0], self.srcs[1], self.srcs[2],)
-    }
-}
 impl_display_for_op!(OpIMad);
 
 /// Only used on SM50
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIMul {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3630,29 +3489,14 @@ pub struct OpIMul {
     #[src_type(ALU)]
     pub srcs: [Src; 2],
 
-    pub signed: [bool; 2],
+    #[modifier]
     pub high: bool,
-}
-
-impl DisplayOp for OpIMul {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "imul")?;
-        if self.high {
-            write!(f, ".hi")?;
-        }
-        let src_type = |signed| if signed { ".s32" } else { ".u32" };
-        write!(
-            f,
-            "{}{}",
-            src_type(self.signed[0]),
-            src_type(self.signed[1])
-        )?;
-        write!(f, " {} {}", self.srcs[0], self.srcs[1])
-    }
+    #[modifier(".s32", ".u32")]
+    pub signed: [bool; 2],
 }
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIMad64 {
     #[dst_type(Vec)]
     pub dst: Dst,
@@ -3660,26 +3504,19 @@ pub struct OpIMad64 {
     #[src_type(ALU)]
     pub srcs: [Src; 3],
 
+    #[modifier(".s")]
     pub signed: bool,
 }
 
-impl DisplayOp for OpIMad64 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "imad64 {} {} {}",
-            self.srcs[0], self.srcs[1], self.srcs[2],
-        )
-    }
-}
 impl_display_for_op!(OpIMad64);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIMnMx {
     #[dst_type(GPR)]
     pub dst: Dst,
 
+    #[modifier]
     pub cmp_type: IntCmpType,
 
     #[src_type(ALU)]
@@ -3689,15 +3526,6 @@ pub struct OpIMnMx {
     pub min: Src,
 }
 
-impl DisplayOp for OpIMnMx {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "imnmx{} {} {} {}",
-            self.cmp_type, self.srcs[0], self.srcs[1], self.min
-        )
-    }
-}
 impl_display_for_op!(OpIMnMx);
 
 #[repr(C)]
@@ -3944,7 +3772,7 @@ impl DisplayOp for OpLeaX {
 impl_display_for_op!(OpLeaX);
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpLop2 {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3952,13 +3780,8 @@ pub struct OpLop2 {
     #[src_type(B32)]
     pub srcs: [Src; 2],
 
+    #[modifier]
     pub op: LogicOp2,
-}
-
-impl DisplayOp for OpLop2 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "lop2.{} {} {}", self.op, self.srcs[0], self.srcs[1],)
-    }
 }
 
 impl Foldable for OpLop2 {
@@ -3978,7 +3801,7 @@ impl Foldable for OpLop2 {
 }
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpLop3 {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -3986,6 +3809,7 @@ pub struct OpLop3 {
     #[src_type(ALU)]
     pub srcs: [Src; 3],
 
+    #[modifier]
     pub op: LogicOp3,
 }
 
@@ -4001,34 +3825,14 @@ impl Foldable for OpLop3 {
     }
 }
 
-impl DisplayOp for OpLop3 {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "lop3.{} {} {} {}",
-            self.op, self.srcs[0], self.srcs[1], self.srcs[2],
-        )
-    }
-}
 impl_display_for_op!(OpLop3);
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum ShflOp {
     Idx,
     Up,
     Down,
     Bfly,
-}
-
-impl fmt::Display for ShflOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ShflOp::Idx => write!(f, "idx"),
-            ShflOp::Up => write!(f, "up"),
-            ShflOp::Down => write!(f, "down"),
-            ShflOp::Bfly => write!(f, "bfly"),
-        }
-    }
 }
 
 #[repr(C)]
@@ -4121,7 +3925,7 @@ impl_display_for_op!(OpShf);
 
 /// Only used on SM50
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpShl {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -4132,22 +3936,13 @@ pub struct OpShl {
     #[src_type(ALU)]
     pub shift: Src,
 
+    #[modifier(".w")]
     pub wrap: bool,
-}
-
-impl DisplayOp for OpShl {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "shl")?;
-        if self.wrap {
-            write!(f, ".w")?;
-        }
-        write!(f, " {} {}", self.src, self.shift)
-    }
 }
 
 /// Only used on SM50
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpShr {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -4158,40 +3953,37 @@ pub struct OpShr {
     #[src_type(ALU)]
     pub shift: Src,
 
+    #[modifier(".w")]
     pub wrap: bool,
+    #[modifier("", ".u32")]
     pub signed: bool,
 }
 
-impl DisplayOp for OpShr {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "shr")?;
-        if self.wrap {
-            write!(f, ".w")?;
-        }
-        if !self.signed {
-            write!(f, ".u32")?;
-        }
-        write!(f, " {} {}", self.src, self.shift)
-    }
-}
-
 #[repr(C)]
+#[derive(DisplayOp)]
 pub struct OpF2F {
     pub dst: Dst,
     pub src: Src,
 
-    pub src_type: FloatType,
-    pub dst_type: FloatType,
-    pub rnd_mode: FRndMode,
+    #[modifier]
     pub ftz: bool,
     /// For 16-bit up-conversions, take the high 16 bits of the source register.
     /// For 16-bit down-conversions, place the result into the upper 16 bits of
     /// the destination register
+    #[modifier(".hi")]
     pub high: bool,
     /// Round to the nearest integer rather than nearest float
     ///
     /// Not available on SM70+
+    #[modifier("int")]
     pub integer_rnd: bool,
+
+    #[modifier]
+    pub dst_type: FloatType,
+    #[modifier]
+    pub src_type: FloatType,
+    #[modifier]
+    pub rnd_mode: FRndMode,
 }
 
 impl AsSlice<Src> for OpF2F {
@@ -4235,27 +4027,11 @@ impl AsSlice<Dst> for OpF2F {
         DstTypeList::Uniform(dst_type)
     }
 }
-
-impl DisplayOp for OpF2F {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "f2f")?;
-        if self.ftz {
-            write!(f, ".ftz")?;
-        }
-        if self.integer_rnd {
-            write!(f, ".int")?;
-        }
-        write!(
-            f,
-            "{}{}{} {}",
-            self.dst_type, self.src_type, self.rnd_mode, self.src,
-        )
-    }
-}
 impl_display_for_op!(OpF2F);
 
 #[repr(C)]
-#[derive(DstsAsSlice, SrcsAsSlice)]
+#[derive(DstsAsSlice, SrcsAsSlice, DisplayOp)]
+#[display_op(format = "f2fp.pack_ab")]
 pub struct OpF2FP {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -4263,31 +4039,26 @@ pub struct OpF2FP {
     #[src_type(ALU)]
     pub srcs: [Src; 2],
 
+    #[modifier(def = FRndMode::NearestEven)]
     pub rnd_mode: FRndMode,
-}
-
-impl DisplayOp for OpF2FP {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "f2fp.pack_ab")?;
-        if self.rnd_mode != FRndMode::NearestEven {
-            write!(f, "{}", self.rnd_mode)?;
-        }
-        write!(f, " {}, {}", self.srcs[0], self.srcs[1],)
-    }
 }
 impl_display_for_op!(OpF2FP);
 
 #[repr(C)]
-#[derive(DstsAsSlice)]
+#[derive(DstsAsSlice, DisplayOp)]
 pub struct OpF2I {
     #[dst_type(GPR)]
     pub dst: Dst,
 
     pub src: Src,
 
-    pub src_type: FloatType,
+    #[modifier]
     pub dst_type: IntType,
+    #[modifier]
+    pub src_type: FloatType,
+    #[modifier]
     pub rnd_mode: FRndMode,
+    #[modifier]
     pub ftz: bool,
 }
 
@@ -4312,25 +4083,19 @@ impl AsSlice<Src> for OpF2I {
     }
 }
 
-impl DisplayOp for OpF2I {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ftz = if self.ftz { ".ftz" } else { "" };
-        write!(
-            f,
-            "f2i{}{}{}{ftz} {}",
-            self.dst_type, self.src_type, self.rnd_mode, self.src,
-        )
-    }
-}
 impl_display_for_op!(OpF2I);
 
 #[repr(C)]
+#[derive(DisplayOp)]
 pub struct OpI2F {
     pub dst: Dst,
     pub src: Src,
 
+    #[modifier]
     pub dst_type: FloatType,
+    #[modifier]
     pub src_type: IntType,
+    #[modifier]
     pub rnd_mode: FRndMode,
 }
 
@@ -4375,15 +4140,6 @@ impl AsSlice<Dst> for OpI2F {
     }
 }
 
-impl DisplayOp for OpI2F {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "i2f{}{}{} {}",
-            self.dst_type, self.src_type, self.rnd_mode, self.src,
-        )
-    }
-}
 impl_display_for_op!(OpI2F);
 
 /// Not used on SM70+
@@ -4423,16 +4179,20 @@ impl DisplayOp for OpI2I {
 impl_display_for_op!(OpI2I);
 
 #[repr(C)]
-#[derive(DstsAsSlice)]
+#[derive(DstsAsSlice, DisplayOp)]
 pub struct OpFRnd {
     #[dst_type(F32)]
     pub dst: Dst,
 
     pub src: Src,
 
+    #[modifier]
     pub dst_type: FloatType,
+    #[modifier]
     pub src_type: FloatType,
+    #[modifier]
     pub rnd_mode: FRndMode,
+    #[modifier]
     pub ftz: bool,
 }
 
@@ -4454,17 +4214,6 @@ impl AsSlice<Src> for OpFRnd {
             FloatType::F64 => SrcType::F64,
         };
         SrcTypeList::Uniform(src_type)
-    }
-}
-
-impl DisplayOp for OpFRnd {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ftz = if self.ftz { ".ftz" } else { "" };
-        write!(
-            f,
-            "frnd{}{}{}{ftz} {}",
-            self.dst_type, self.src_type, self.rnd_mode, self.src,
-        )
     }
 }
 impl_display_for_op!(OpFRnd);
@@ -4552,29 +4301,22 @@ impl PrmtSel {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum PrmtMode {
+    #[modifier(default)]
     Index,
+    #[modifier("f4e")]
     Forward4Extract,
+    #[modifier("b4e")]
     Backward4Extract,
+    #[modifier("rc8")]
     Replicate8,
+    #[modifier("ecl")]
     EdgeClampLeft,
+    #[modifier("ecr")]
     EdgeClampRight,
+    #[modifier("rc16")]
     Replicate16,
-}
-
-impl fmt::Display for PrmtMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PrmtMode::Index => Ok(()),
-            PrmtMode::Forward4Extract => write!(f, ".f4e"),
-            PrmtMode::Backward4Extract => write!(f, ".b4e"),
-            PrmtMode::Replicate8 => write!(f, ".rc8"),
-            PrmtMode::EdgeClampLeft => write!(f, ".ecl"),
-            PrmtMode::EdgeClampRight => write!(f, ".ecl"),
-            PrmtMode::Replicate16 => write!(f, ".rc16"),
-        }
-    }
 }
 
 #[repr(C)]
@@ -4663,7 +4405,7 @@ impl DisplayOp for OpPrmt {
 impl_display_for_op!(OpPrmt);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpSel {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -4675,15 +4417,10 @@ pub struct OpSel {
     pub srcs: [Src; 2],
 }
 
-impl DisplayOp for OpSel {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "sel {} {} {}", self.cond, self.srcs[0], self.srcs[1],)
-    }
-}
 impl_display_for_op!(OpSel);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpShfl {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -4700,14 +4437,10 @@ pub struct OpShfl {
     #[src_type(ALU)]
     pub c: Src,
 
+    #[modifier]
     pub op: ShflOp,
 }
 
-impl DisplayOp for OpShfl {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "shfl.{} {} {} {}", self.op, self.src, self.lane, self.c)
-    }
-}
 impl_display_for_op!(OpShfl);
 
 #[repr(C)]
@@ -4738,11 +4471,12 @@ impl DisplayOp for OpPLop3 {
 impl_display_for_op!(OpPLop3);
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpPSetP {
     #[dst_type(Pred)]
     pub dsts: [Dst; 2],
 
+    #[modifier]
     pub ops: [PredSetOp; 2],
 
     #[src_type(Pred)]
@@ -4768,18 +4502,8 @@ impl Foldable for OpPSetP {
     }
 }
 
-impl DisplayOp for OpPSetP {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "psetp{}{} {} {} {}",
-            self.ops[0], self.ops[1], self.srcs[0], self.srcs[1], self.srcs[2],
-        )
-    }
-}
-
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpPopC {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -4796,15 +4520,10 @@ impl Foldable for OpPopC {
     }
 }
 
-impl DisplayOp for OpPopC {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "popc {}", self.src,)
-    }
-}
 impl_display_for_op!(OpPopC);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpR2UR {
     #[dst_type(GPR)]
     pub dst: Dst,
@@ -4813,11 +4532,6 @@ pub struct OpR2UR {
     pub src: Src,
 }
 
-impl DisplayOp for OpR2UR {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "r2ur {}", self.src)
-    }
-}
 impl_display_for_op!(OpR2UR);
 
 #[repr(C)]
@@ -4844,7 +4558,7 @@ impl DisplayOp for OpTex {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "tex{}", self.dim)?;
         if self.lod_mode != TexLodMode::Auto {
-            write!(f, ".{}", self.lod_mode)?;
+            write!(f, "{}", self.lod_mode)?;
         }
         if self.offset {
             write!(f, ".aoffi")?;
@@ -4885,7 +4599,7 @@ impl DisplayOp for OpTld {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "tld{}", self.dim)?;
         if self.lod_mode != TexLodMode::Auto {
-            write!(f, ".{}", self.lod_mode)?;
+            write!(f, "{}", self.lod_mode)?;
         }
         if self.offset {
             write!(f, ".aoffi")?;
@@ -4926,7 +4640,7 @@ impl DisplayOp for OpTld4 {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "tld4.g{}", self.dim)?;
         if self.offset_mode != Tld4OffsetMode::None {
-            write!(f, ".{}", self.offset_mode)?;
+            write!(f, "{}", self.offset_mode)?;
         }
         if self.z_cmpr {
             write!(f, ".dc")?;
@@ -5066,14 +4780,14 @@ pub struct OpSuSt {
     pub mem_eviction_priority: MemEvictionPriority,
     pub mask: u8,
 
-    #[src_type(GPR)]
-    pub handle: Src,
-
     #[src_type(SSA)]
     pub coord: Src,
 
     #[src_type(SSA)]
     pub data: Src,
+
+    #[src_type(GPR)]
+    pub handle: Src,
 }
 
 impl DisplayOp for OpSuSt {
@@ -5093,88 +4807,65 @@ impl DisplayOp for OpSuSt {
 impl_display_for_op!(OpSuSt);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
+#[display_op(format = "suatom.p")]
 pub struct OpSuAtom {
     pub dst: Dst,
     pub fault: Dst,
 
+    #[modifier]
     pub image_dim: ImageDim,
 
+    #[modifier]
     pub atom_op: AtomOp,
+    #[modifier]
     pub atom_type: AtomType,
 
+    #[modifier]
     pub mem_order: MemOrder,
+    #[modifier]
     pub mem_eviction_priority: MemEvictionPriority,
 
-    #[src_type(GPR)]
-    pub handle: Src,
-
     #[src_type(SSA)]
+    #[op_format("[{}]")]
     pub coord: Src,
 
     #[src_type(SSA)]
     pub data: Src,
+
+    #[src_type(GPR)]
+    pub handle: Src,
 }
 
-impl DisplayOp for OpSuAtom {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "suatom.p{}{}{}{}{} [{}] {} {}",
-            self.image_dim,
-            self.atom_op,
-            self.atom_type,
-            self.mem_order,
-            self.mem_eviction_priority,
-            self.coord,
-            self.data,
-            self.handle,
-        )
-    }
-}
 impl_display_for_op!(OpSuAtom);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpLd {
     pub dst: Dst,
 
     #[src_type(GPR)]
+    #[op_format(addr, offset = "offset")]
     pub addr: Src,
 
     pub offset: i32,
+    #[modifier]
     pub access: MemAccess,
 }
 
-impl DisplayOp for OpLd {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ld{} [{}", self.access, self.addr)?;
-        if self.offset > 0 {
-            write!(f, "+{:#x}", self.offset)?;
-        }
-        write!(f, "]")
-    }
-}
 impl_display_for_op!(OpLd);
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum LdcMode {
+    #[modifier(default)]
     Indexed,
+    #[modifier("il")]
     IndexedLinear,
+    #[modifier("is")]
     IndexedSegmented,
+    #[modifier("isl")]
     IndexedSegmentedLinear,
-}
-
-impl fmt::Display for LdcMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LdcMode::Indexed => Ok(()),
-            LdcMode::IndexedLinear => write!(f, ".il"),
-            LdcMode::IndexedSegmented => write!(f, ".is"),
-            LdcMode::IndexedSegmentedLinear => write!(f, ".isl"),
-        }
-    }
 }
 
 #[repr(C)]
@@ -5211,27 +4902,20 @@ impl DisplayOp for OpLdc {
 impl_display_for_op!(OpLdc);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpSt {
     #[src_type(GPR)]
+    #[op_format(addr, offset = "offset")]
     pub addr: Src,
 
     #[src_type(SSA)]
     pub data: Src,
 
     pub offset: i32,
+    #[modifier]
     pub access: MemAccess,
 }
 
-impl DisplayOp for OpSt {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "st{} [{}", self.access, self.addr)?;
-        if self.offset > 0 {
-            write!(f, "+{:#x}", self.offset)?;
-        }
-        write!(f, "] {}", self.data)
-    }
-}
 impl_display_for_op!(OpSt);
 
 #[repr(C)]
@@ -5442,19 +5126,22 @@ impl DisplayOp for OpLdTram {
 impl_display_for_op!(OpLdTram);
 
 #[allow(dead_code)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, ModifierDisplay, ModifierParse)]
 pub enum CCtlOp {
     Qry1, // Only available pre-Volta
     PF1,
+    #[modifier("pf1.5")]
     PF1_5, // Only available pre-Volta
     PF2,
     WB,
     IV,
     IVAll,
     RS,
-    RSLB,   // Only available pre-Volta
+    RSLB, // Only available pre-Volta
+    #[modifier("ivallp")]
     IVAllP, // Only available on Volta+
-    WBAll,  // Only available on Volta+
+    WBAll, // Only available on Volta+
+    #[modifier("wballp")]
     WBAllP, // Only available on Volta+
 }
 
@@ -5476,25 +5163,6 @@ impl CCtlOp {
     }
 }
 
-impl fmt::Display for CCtlOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CCtlOp::Qry1 => write!(f, "qry1"),
-            CCtlOp::PF1 => write!(f, "pf1"),
-            CCtlOp::PF1_5 => write!(f, "pf1.5"),
-            CCtlOp::PF2 => write!(f, "pf2"),
-            CCtlOp::WB => write!(f, "wb"),
-            CCtlOp::IV => write!(f, "iv"),
-            CCtlOp::IVAll => write!(f, "ivall"),
-            CCtlOp::RS => write!(f, "rs"),
-            CCtlOp::RSLB => write!(f, "rslb"),
-            CCtlOp::IVAllP => write!(f, "ivallp"),
-            CCtlOp::WBAll => write!(f, "wball"),
-            CCtlOp::WBAllP => write!(f, "wballp"),
-        }
-    }
-}
-
 #[repr(C)]
 #[derive(SrcsAsSlice, DstsAsSlice)]
 pub struct OpCCtl {
@@ -5512,11 +5180,14 @@ impl DisplayOp for OpCCtl {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "cctl{}", self.mem_space)?;
         if !self.op.is_all() {
-            write!(f, " [{}", self.addr)?;
-            if self.addr_offset > 0 {
-                write!(f, "+{:#x}", self.addr_offset)?;
-            }
-            write!(f, "]")?;
+            write!(
+                f,
+                " {}",
+                FmtAddr {
+                    src: self.addr,
+                    off: self.addr_offset
+                }
+            )?;
         }
         Ok(())
     }
@@ -5524,52 +5195,38 @@ impl DisplayOp for OpCCtl {
 impl_display_for_op!(OpCCtl);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
+#[display_op(format = "membar.sc")]
 pub struct OpMemBar {
+    #[modifier]
     pub scope: MemScope,
 }
 
-impl DisplayOp for OpMemBar {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "membar.sc.{}", self.scope)
-    }
-}
 impl_display_for_op!(OpMemBar);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBClear {
     pub dst: Dst,
 }
 
-impl DisplayOp for OpBClear {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bclear")
-    }
-}
 impl_display_for_op!(OpBClear);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
+#[display_op(format = "bmov.32")]
 pub struct OpBMov {
     pub dst: Dst,
     pub src: Src,
+
+    #[modifier]
     pub clear: bool,
 }
 
-impl DisplayOp for OpBMov {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bmov.32")?;
-        if self.clear {
-            write!(f, ".clear")?;
-        }
-        write!(f, " {}", self.src)
-    }
-}
 impl_display_for_op!(OpBMov);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBreak {
     #[dst_type(Bar)]
     pub bar_out: Dst,
@@ -5581,15 +5238,10 @@ pub struct OpBreak {
     pub cond: Src,
 }
 
-impl DisplayOp for OpBreak {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "break {} {}", self.bar_in, self.cond)
-    }
-}
 impl_display_for_op!(OpBreak);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBSSy {
     #[dst_type(Bar)]
     pub bar_out: Dst,
@@ -5603,15 +5255,10 @@ pub struct OpBSSy {
     pub target: Label,
 }
 
-impl DisplayOp for OpBSSy {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bssy {} {} {}", self.bar_in, self.cond, self.target)
-    }
-}
 impl_display_for_op!(OpBSSy);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBSync {
     #[src_type(Bar)]
     pub bar: Src,
@@ -5620,113 +5267,68 @@ pub struct OpBSync {
     pub cond: Src,
 }
 
-impl DisplayOp for OpBSync {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bsync {} {}", self.bar, self.cond)
-    }
-}
 impl_display_for_op!(OpBSync);
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBra {
     pub target: Label,
 }
 
-impl DisplayOp for OpBra {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bra {}", self.target)
-    }
-}
 impl_display_for_op!(OpBra);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpSSy {
     pub target: Label,
 }
 
-impl DisplayOp for OpSSy {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ssy {}", self.target)
-    }
-}
 impl_display_for_op!(OpSSy);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpSync {
     pub target: Label,
 }
 
-impl DisplayOp for OpSync {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "sync {}", self.target)
-    }
-}
 impl_display_for_op!(OpSync);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpBrk {
     pub target: Label,
 }
 
-impl DisplayOp for OpBrk {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "brk {}", self.target)
-    }
-}
 impl_display_for_op!(OpBrk);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpPBk {
     pub target: Label,
 }
 
-impl DisplayOp for OpPBk {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "pbk {}", self.target)
-    }
-}
 impl_display_for_op!(OpPBk);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpCont {
     pub target: Label,
 }
 
-impl DisplayOp for OpCont {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "cont {}", self.target)
-    }
-}
 impl_display_for_op!(OpCont);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpPCnt {
     pub target: Label,
 }
 
-impl DisplayOp for OpPCnt {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "pcnt {}", self.target)
-    }
-}
 impl_display_for_op!(OpPCnt);
 
 #[repr(C)]
-#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpExit {}
 
-impl DisplayOp for OpExit {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "exit")
-    }
-}
 impl_display_for_op!(OpExit);
 
 #[repr(C)]
@@ -5743,14 +5345,10 @@ impl DisplayOp for OpWarpSync {
 impl_display_for_op!(OpWarpSync);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
+#[display_op(format = "bar.sync")]
 pub struct OpBar {}
 
-impl DisplayOp for OpBar {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "bar.sync")
-    }
-}
 impl_display_for_op!(OpBar);
 
 #[repr(C)]
@@ -5768,31 +5366,22 @@ impl DisplayOp for OpCS2R {
 impl_display_for_op!(OpCS2R);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpIsberd {
     #[dst_type(GPR)]
     pub dst: Dst,
 
     #[src_type(SSA)]
+    #[op_format("[{}]")]
     pub idx: Src,
 }
 
-impl DisplayOp for OpIsberd {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "isberd [{}]", self.idx)
-    }
-}
 impl_display_for_op!(OpIsberd);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpKill {}
 
-impl DisplayOp for OpKill {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "kill")
-    }
-}
 impl_display_for_op!(OpKill);
 
 #[repr(C)]
@@ -5813,8 +5402,11 @@ impl DisplayOp for OpNop {
 impl_display_for_op!(OpNop);
 
 #[allow(dead_code)]
+#[derive(ModifierDisplay, ModifierParse)]
 pub enum PixVal {
+    #[modifier("mscount")]
     MsCount,
+    #[modifier("covmask")]
     CovMask,
     Covered,
     Offset,
@@ -5823,32 +5415,14 @@ pub enum PixVal {
     InnerCoverage,
 }
 
-impl fmt::Display for PixVal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PixVal::MsCount => write!(f, ".mscount"),
-            PixVal::CovMask => write!(f, ".covmask"),
-            PixVal::Covered => write!(f, ".covered"),
-            PixVal::Offset => write!(f, ".offset"),
-            PixVal::CentroidOffset => write!(f, ".centroid_offset"),
-            PixVal::MyIndex => write!(f, ".my_index"),
-            PixVal::InnerCoverage => write!(f, ".inner_coverage"),
-        }
-    }
-}
-
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpPixLd {
     pub dst: Dst,
+    #[modifier]
     pub val: PixVal,
 }
 
-impl DisplayOp for OpPixLd {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "pixld{}", self.val)
-    }
-}
 impl_display_for_op!(OpPixLd);
 
 #[repr(C)]
@@ -5865,20 +5439,11 @@ impl DisplayOp for OpS2R {
 }
 impl_display_for_op!(OpS2R);
 
+#[derive(EnumDisplay, EnumParse)]
 pub enum VoteOp {
     Any,
     All,
     Eq,
-}
-
-impl fmt::Display for VoteOp {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VoteOp::Any => write!(f, "any"),
-            VoteOp::All => write!(f, "all"),
-            VoteOp::Eq => write!(f, "eq"),
-        }
-    }
 }
 
 #[repr(C)]
@@ -5917,30 +5482,61 @@ impl DisplayOp for OpVote {
 }
 impl_display_for_op!(OpVote);
 
+impl WithDefaultParser for OpVote {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        let dst = (
+            Dst::parse
+                .and(preceded(whitespace, Dst::parse).opt())
+                .and_then(|(a, b)| {
+                    Ok(match (a, b) {
+                        (Dst::None, _) => (Dst::None, Dst::None),
+                        (a, Some(b)) | (b, Some(a))
+                            if a.is_gpr() && b.is_predicate() =>
+                        {
+                            (a, b)
+                        }
+                        (a, None) if a.is_gpr() => (a, Dst::None),
+                        (a, None) if a.is_predicate() => (Dst::None, a),
+                        _ => {
+                            return Err(ErrorKind::CustomErr(
+                                "Dst not valid for neither vote nor ballot",
+                            ))
+                        }
+                    })
+                }),
+            tag("none").map(|_| (Dst::None, Dst::None)),
+        )
+            .or();
+
+        let op = preceded_unique(
+            whitespace.and(tag("vote.")),
+            VoteOp::parse.and(Src::parse(SrcType::Pred).ws()),
+        );
+        dst.and(op)
+            .map(|((ballot, vote), (op, pred))| OpVote {
+                ballot,
+                vote,
+                op,
+                pred,
+            })
+            .parse(input)
+    }
+}
+
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpUndef {
     pub dst: Dst,
 }
 
-impl DisplayOp for OpUndef {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "undef {}", self.dst)
-    }
-}
 impl_display_for_op!(OpUndef);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpSrcBar {
     pub src: Src,
 }
 
-impl DisplayOp for OpSrcBar {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "src_bar {}", self.src)
-    }
-}
 impl_display_for_op!(OpSrcBar);
 
 pub struct VecPair<A, B> {
@@ -6026,6 +5622,18 @@ impl<A: Clone, B: Clone> VecPair<A, B> {
     }
 }
 
+impl<A, B> From<Vec<(A, B)>> for VecPair<A, B> {
+    fn from(mut value: Vec<(A, B)>) -> Self {
+        let mut res = VecPair::new();
+        res.a.reserve(value.len());
+        res.b.reserve(value.len());
+        for (a, b) in value.drain(..) {
+            res.push(a, b);
+        }
+        res
+    }
+}
+
 pub struct PhiAllocator {
     count: u32,
 }
@@ -6090,6 +5698,19 @@ impl DisplayOp for OpPhiSrcs {
 }
 impl_display_for_op!(OpPhiSrcs);
 
+impl WithDefaultParser for OpPhiSrcs {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        let phi = preceded(whitespace.and(one_of("φp")), u32::parse)
+            .and(preceded(tag("=").ws(), Src::parse(SrcType::GPR)));
+
+        let phi_list = separated_list0(phi, tag(",").ws());
+
+        preceded_unique(tag("phi_src").ws(), phi_list)
+            .map(|srcs| OpPhiSrcs { srcs: srcs.into() })
+            .parse(input)
+    }
+}
+
 #[repr(C)]
 #[derive(SrcsAsSlice)]
 pub struct OpPhiDsts {
@@ -6138,22 +5759,30 @@ impl DisplayOp for OpPhiDsts {
 }
 impl_display_for_op!(OpPhiDsts);
 
+impl WithDefaultParser for OpPhiDsts {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        let phi = Dst::parse
+            .and(preceded(tag("=").ws().and(one_of("φp")), u32::parse))
+            .map(|(a, b)| (b, a));
+        let phi_list = separated_list0(phi, tag(",").ws());
+
+        preceded_unique(tag("phi_dst").ws(), phi_list)
+            .map(|dsts| OpPhiDsts { dsts: dsts.into() })
+            .parse(input)
+    }
+}
+
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpCopy {
     pub dst: Dst,
     pub src: Src,
 }
 
-impl DisplayOp for OpCopy {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "copy {}", self.src)
-    }
-}
 impl_display_for_op!(OpCopy);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 /// Copies a value and pins its destination in the register file
 pub struct OpPin {
     pub dst: Dst,
@@ -6161,15 +5790,10 @@ pub struct OpPin {
     pub src: Src,
 }
 
-impl DisplayOp for OpPin {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "pin {}", self.src)
-    }
-}
 impl_display_for_op!(OpPin);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 /// Copies a pinned value to an unpinned value
 pub struct OpUnpin {
     pub dst: Dst,
@@ -6177,25 +5801,15 @@ pub struct OpUnpin {
     pub src: Src,
 }
 
-impl DisplayOp for OpUnpin {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unpin {}", self.src)
-    }
-}
 impl_display_for_op!(OpUnpin);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpSwap {
     pub dsts: [Dst; 2],
     pub srcs: [Src; 2],
 }
 
-impl DisplayOp for OpSwap {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "swap {} {}", self.srcs[0], self.srcs[1])
-    }
-}
 impl_display_for_op!(OpSwap);
 
 #[repr(C)]
@@ -6260,6 +5874,9 @@ impl DisplayOp for OpParCopy {
 
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "par_copy")?;
+        if let Some(tmp) = self.tmp {
+            write!(f, "[{tmp}]")?;
+        }
         for (i, (dst, src)) in self.dsts_srcs.iter().enumerate() {
             if i > 0 {
                 write!(f, ",")?;
@@ -6270,6 +5887,20 @@ impl DisplayOp for OpParCopy {
     }
 }
 impl_display_for_op!(OpParCopy);
+
+impl WithDefaultParser for OpParCopy {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        let tmp = delimited(tag("["), RegRef::parse, tag("]")).opt();
+        let copy = Dst::parse.and(preceded(
+            whitespace.and(tag("=")).and(whitespace),
+            Src::parse(SrcType::GPR),
+        ));
+        let copies = many0(preceded(whitespace, copy)).map(|x| x.into());
+        preceded_unique(whitespace.and(tag("par_copy")), tmp.and(copies))
+            .map(|(tmp, dsts_srcs)| OpParCopy { tmp, dsts_srcs })
+            .parse(input)
+    }
+}
 
 #[repr(C)]
 #[derive(DstsAsSlice)]
@@ -6307,25 +5938,33 @@ impl DisplayOp for OpRegOut {
 }
 impl_display_for_op!(OpRegOut);
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+impl WithDefaultParser for OpRegOut {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        preceded_unique(
+            (whitespace, tag("reg_out")).and(),
+            delimited(
+                whitespace.and(tag("{")),
+                separated_list0(
+                    Src::parse(SrcType::GPR),
+                    whitespace.and(tag(",")).and(whitespace),
+                ),
+                whitespace.and(tag("}")),
+            ),
+        )
+        .map(|srcs| OpRegOut { srcs })
+        .parse(input)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, ModifierDisplay, ModifierParse)]
 pub enum OutType {
     Emit,
     Cut,
     EmitThenCut,
 }
 
-impl fmt::Display for OutType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            OutType::Emit => write!(f, "emit"),
-            OutType::Cut => write!(f, "cut"),
-            OutType::EmitThenCut => write!(f, "emit_then_cut"),
-        }
-    }
-}
-
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
 pub struct OpOut {
     pub dst: Dst,
 
@@ -6335,28 +5974,21 @@ pub struct OpOut {
     #[src_type(ALU)]
     pub stream: Src,
 
+    #[modifier]
     pub out_type: OutType,
 }
 
-impl DisplayOp for OpOut {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "out.{} {} {}", self.out_type, self.handle, self.stream)
-    }
-}
 impl_display_for_op!(OpOut);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(SrcsAsSlice, DstsAsSlice, DisplayOp)]
+#[display_op(format = "out.final")]
 pub struct OpOutFinal {
     #[src_type(SSA)]
+    #[op_format("{{ {} }}")]
     pub handle: Src,
 }
 
-impl DisplayOp for OpOutFinal {
-    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "out.final {{ {} }}", self.handle)
-    }
-}
 impl_display_for_op!(OpOutFinal);
 
 /// Describes an annotation on an instruction.
@@ -6379,7 +6011,17 @@ impl fmt::Display for OpAnnotate {
     }
 }
 
-#[derive(DisplayOp, DstsAsSlice, SrcsAsSlice, FromVariants)]
+impl WithDefaultParser for OpAnnotate {
+    fn parse<'a>(input: &'a str) -> PResult<'a, Self> {
+        line_comment("//")
+            .map(|x| OpAnnotate {
+                annotation: x.trim().to_string(),
+            })
+            .parse(input)
+    }
+}
+
+#[derive(DisplayOp, DstsAsSlice, SrcsAsSlice, FromVariants)] // EnumParse
 pub enum Op {
     FAdd(OpFAdd),
     FFma(OpFFma),
