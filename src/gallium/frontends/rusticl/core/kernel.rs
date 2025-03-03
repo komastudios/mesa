@@ -342,12 +342,12 @@ pub struct KernelInfo {
     num_subgroups: usize,
 }
 
-struct CSOWrapper {
+struct SharedCSOWrapper {
     cso_ptr: *mut c_void,
     dev: &'static Device,
 }
 
-impl CSOWrapper {
+impl SharedCSOWrapper {
     fn new(dev: &'static Device, nir: &NirShader) -> Self {
         let cso_ptr = dev
             .helper_ctx()
@@ -364,14 +364,14 @@ impl CSOWrapper {
     }
 }
 
-impl Drop for CSOWrapper {
+impl Drop for SharedCSOWrapper {
     fn drop(&mut self) {
         self.dev.helper_ctx().delete_compute_state(self.cso_ptr);
     }
 }
 
 enum KernelDevStateVariant {
-    Cso(CSOWrapper),
+    Cso(SharedCSOWrapper),
     Nir(NirShader),
 }
 
@@ -447,7 +447,7 @@ unsafe impl Sync for NirKernelBuild {}
 
 impl NirKernelBuild {
     fn new(dev: &'static Device, mut out: CompilationResult) -> Self {
-        let cso = CSOWrapper::new(dev, &out.nir);
+        let cso = SharedCSOWrapper::new(dev, &out.nir);
         let info = cso.get_cso_info();
         let cb = Self::create_nir_constant_buffer(dev, &out.nir);
         let shared_size = out.nir.shared_size() as u64;
@@ -1555,7 +1555,7 @@ impl Kernel {
             let cso = match &nir_kernel_build.nir_or_cso {
                 KernelDevStateVariant::Cso(cso) => cso,
                 KernelDevStateVariant::Nir(nir) => {
-                    temp_cso = CSOWrapper::new(q.device, nir);
+                    temp_cso = SharedCSOWrapper::new(q.device, nir);
                     &temp_cso
                 }
             };
