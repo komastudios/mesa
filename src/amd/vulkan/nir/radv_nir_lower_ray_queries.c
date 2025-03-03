@@ -210,7 +210,7 @@ init_ray_query_intersection_vars(void *ctx, nir_shader *shader, unsigned array_l
 
 static void
 init_ray_query_vars(nir_shader *shader, unsigned array_length, struct ray_query_vars *dst, const char *base_name,
-                    uint32_t max_shared_size)
+                    const struct radv_physical_device *pdev)
 {
    void *ctx = dst;
    const struct glsl_type *vec3_type = glsl_vector_type(GLSL_TYPE_FLOAT, 3);
@@ -231,11 +231,14 @@ init_ray_query_vars(nir_shader *shader, unsigned array_length, struct ray_query_
 
    uint32_t workgroup_size =
       shader->info.workgroup_size[0] * shader->info.workgroup_size[1] * shader->info.workgroup_size[2];
+   if (shader->info.stage == MESA_SHADER_FRAGMENT)
+      workgroup_size = pdev->ps_wave_size;
    uint32_t shared_stack_entries = shader->info.ray_queries == 1 ? 16 : 8;
    uint32_t shared_stack_size = workgroup_size * shared_stack_entries * 4;
    uint32_t shared_offset = align(shader->info.shared_size, 4);
-   if (shader->info.stage != MESA_SHADER_COMPUTE || array_length > 1 ||
-       shared_offset + shared_stack_size > max_shared_size) {
+   bool stage_is_supported = shader->info.stage == MESA_SHADER_COMPUTE || gl_shader_stage_is_rt(shader->info.stage) ||
+                             shader->info.stage == MESA_SHADER_FRAGMENT;
+   if (!stage_is_supported || array_length > 1 || shared_offset + shared_stack_size > pdev->max_shared_size) {
       dst->stack =
          rq_variable_create(dst, shader, array_length,
                             glsl_array_type(glsl_uint_type(), MAX_SCRATCH_STACK_ENTRY_COUNT, 0), VAR_NAME("_stack"));
@@ -252,7 +255,8 @@ init_ray_query_vars(nir_shader *shader, unsigned array_length, struct ray_query_
 #undef VAR_NAME
 
 static void
-lower_ray_query(nir_shader *shader, nir_variable *ray_query, struct hash_table *ht, uint32_t max_shared_size)
+lower_ray_query(nir_shader *shader, nir_variable *ray_query, struct hash_table *ht,
+                const struct radv_physical_device *pdev)
 {
    struct ray_query_vars *vars = ralloc(ht, struct ray_query_vars);
 
@@ -260,7 +264,7 @@ lower_ray_query(nir_shader *shader, nir_variable *ray_query, struct hash_table *
    if (glsl_type_is_array(ray_query->type))
       array_length = glsl_get_length(ray_query->type);
 
-   init_ray_query_vars(shader, array_length, vars, ray_query->name == NULL ? "" : ray_query->name, max_shared_size);
+   init_ray_query_vars(shader, array_length, vars, ray_query->name == NULL ? "" : ray_query->name, pdev);
 
    _mesa_hash_table_insert(ht, ray_query, vars);
 }
@@ -607,6 +611,8 @@ lower_rq_proceed(nir_builder *b, nir_def *index, nir_intrinsic_instr *instr, str
    } else {
       uint32_t workgroup_size =
          b->shader->info.workgroup_size[0] * b->shader->info.workgroup_size[1] * b->shader->info.workgroup_size[2];
+      if (b->shader->info.stage == MESA_SHADER_FRAGMENT)
+         workgroup_size = radv_device_physical(device)->ps_wave_size;
       args.stack_stride = workgroup_size * 4;
       args.stack_base = vars->shared_base;
    }
@@ -639,7 +645,7 @@ radv_nir_lower_ray_queries(struct nir_shader *shader, struct radv_device *device
       if (!var->data.ray_query)
          continue;
 
-      lower_ray_query(shader, var, query_ht, pdev->max_shared_size);
+      lower_ray_query(shader, var, query_ht, pdev);
 
       progress = true;
    }
@@ -651,7 +657,7 @@ radv_nir_lower_ray_queries(struct nir_shader *shader, struct radv_device *device
          if (!var->data.ray_query)
             continue;
 
-         lower_ray_query(shader, var, query_ht, pdev->max_shared_size);
+         lower_ray_query(shader, var, query_ht, pdev);
 
          progress = true;
       }
