@@ -441,6 +441,7 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
    if (!state->render.bound_attachments)
       return;
 
+   return;
    printf("%s:%i render_info %p\n", __func__, __LINE__, render_info);
    for (unsigned i = 0; i < fbinfo->rt_count; i++) {
       if (!fbinfo->rts[i].view)

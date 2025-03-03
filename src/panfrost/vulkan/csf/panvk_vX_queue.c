@@ -645,7 +645,7 @@ init_tiler(struct panvk_queue *queue)
       .alignment = 4096,
    };
 
-   tiler_heap->desc = panvk_pool_alloc_mem(&dev->mempools.rw, alloc_info);
+   tiler_heap->desc = panvk_pool_alloc_mem(&dev->mempools.rw_nc, alloc_info);
    if (!panvk_priv_mem_host_addr(tiler_heap->desc)) {
       result = panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                             "Failed to create a tiler heap context");

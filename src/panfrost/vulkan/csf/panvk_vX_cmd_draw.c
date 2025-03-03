@@ -1499,22 +1499,23 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
    bool alpha_to_coverage = dyns->ms.alpha_to_coverage_enable;
    bool writes_z = writes_depth(cmdbuf);
    bool writes_s = writes_stencil(cmdbuf);
+   uint8_t rt_written =
+      color_attachment_written_mask(fs, &cmdbuf->vk.dynamic_graphics_state.cal);
+   uint8_t rt_read = color_attachment_read_mask(fs, &cmdbuf->state.gfx.sysvals);
+   uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
+                     MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
 
    if (dcd0_dirty) {
       struct mali_dcd_flags_0_packed dcd0;
       pan_pack(&dcd0, DCD_FLAGS_0, cfg) {
          if (fs) {
-            uint8_t rt_written = color_attachment_written_mask(
-               fs, &cmdbuf->vk.dynamic_graphics_state.cal);
-            uint8_t rt_read =
-               color_attachment_read_mask(fs, &cmdbuf->state.gfx.sysvals);
-            uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
-                              MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
 
             cfg.allow_forward_pixel_to_kill =
                fs->info.fs.can_fpk && !(rt_mask & ~rt_written) &&
                !(rt_read & rt_written) && !alpha_to_coverage &&
                !cmdbuf->state.gfx.cb.info.any_dest_read;
+            cfg.allow_forward_pixel_to_kill = false;
+            cfg.allow_forward_pixel_to_be_killed = false;
 
             bool writes_zs = writes_z || writes_s;
             bool zs_always_passes = ds_test_always_passes(cmdbuf);
@@ -1533,6 +1534,8 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
 
             cfg.pixel_kill_operation = (enum mali_pixel_kill)earlyzs.kill;
             cfg.zs_update_operation = (enum mali_pixel_kill)earlyzs.update;
+            cfg.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_LATE;
+            cfg.zs_update_operation = MALI_PIXEL_KILL_FORCE_LATE;
             cfg.evaluate_per_sample = fs->info.fs.sample_shading &&
                                       (dyns->ms.rasterization_samples > 1);
 
@@ -1543,6 +1546,8 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
          } else {
             cfg.allow_forward_pixel_to_kill = true;
             cfg.allow_forward_pixel_to_be_killed = true;
+            cfg.allow_forward_pixel_to_kill = false;
+            cfg.allow_forward_pixel_to_be_killed = false;
             cfg.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_EARLY;
             cfg.zs_update_operation = MALI_PIXEL_KILL_FORCE_EARLY;
             cfg.overdraw_alpha0 = true;
@@ -1580,6 +1585,17 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
 
       cs_update_vt_ctx(b)
          cs_move32_to(b, cs_sr_reg32(b, IDVS, DCD1), dcd1.opaque[0]);
+   }
+
+   {
+      struct mali_dcd_flags_2_packed dcd2;
+      pan_pack(&dcd2, DCD_FLAGS_2, cfg) {
+         cfg.read_mask = rt_read & rt_mask;
+         cfg.write_mask = rt_written & rt_mask;
+      }
+
+      cs_update_vt_ctx(b)
+         cs_move32_to(b, cs_sr_reg32(b, IDVS, DCD2), dcd2.opaque[0]);
    }
 }
 
@@ -1651,6 +1667,7 @@ set_tiler_idvs_flags(struct cs_builder *b, struct panvk_cmd_buffer *cmdbuf,
 
          cfg.low_depth_cull = cfg.high_depth_cull =
             vk_rasterization_state_depth_clip_enable(rs);
+         cfg.low_depth_cull = cfg.high_depth_cull = false;
 
          cfg.secondary_shader = vs->info.vs.secondary_enable && fs != NULL;
          cfg.primitive_restart = ia->primitive_restart_enable;
@@ -2434,7 +2451,7 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
       cs_move32_to(b, layer_count, calc_enabled_layer_count(cmdbuf));
       cs_while(b, MALI_CS_CONDITION_GREATER, layer_count) {
          cs_trace_run_fragment(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
-                               false, MALI_TILE_RENDER_ORDER_Z_ORDER, false);
+                               false, MALI_TILE_RENDER_ORDER_HORIZONTAL, false);
 
          cs_add32(b, layer_count, layer_count, -1);
          cs_update_frag_ctx(b)
@@ -2443,7 +2460,7 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
       }
    } else {
       cs_trace_run_fragment(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
-                            false, MALI_TILE_RENDER_ORDER_Z_ORDER, false);
+                            false, MALI_TILE_RENDER_ORDER_HORIZONTAL, false);
    }
    cs_req_res(b, 0);
 

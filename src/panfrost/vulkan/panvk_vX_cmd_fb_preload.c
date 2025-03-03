@@ -628,6 +628,8 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
          cfg.flags_1.render_target_mask =
             cmdbuf->state.gfx.render.bound_attachments &
             MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
+         cfg.flags_2.read_mask = cfg.flags_1.render_target_mask;
+         cfg.flags_2.write_mask = cfg.flags_1.render_target_mask;
       } else {
          /* ZS_EMIT requires late update/kill */
          cfg.flags_0.zs_update_operation = MALI_PIXEL_KILL_FORCE_LATE;
@@ -635,9 +637,11 @@ cmd_emit_dcd(struct panvk_cmd_buffer *cmdbuf, struct pan_fb_info *fbinfo,
          cfg.blend_count = 0;
       }
 
+      cfg.flags_0.primitive_barrier = true;
       cfg.flags_0.allow_forward_pixel_to_kill =
          key->aspects == VK_IMAGE_ASPECT_COLOR_BIT;
-      cfg.flags_0.allow_forward_pixel_to_be_killed = true;
+      cfg.flags_0.allow_forward_pixel_to_kill = false;
+      cfg.flags_0.allow_forward_pixel_to_be_killed = false;
       cfg.depth_stencil = zsd.gpu;
       cfg.flags_1.sample_mask = 0xFFFF;
       cfg.flags_0.multisample_enable = key->samples > 1;
