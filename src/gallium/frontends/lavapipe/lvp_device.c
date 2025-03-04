@@ -2398,7 +2398,6 @@ lvp_GetMemoryFdKHR(VkDevice _device, const VkMemoryGetFdInfoKHR *pGetFdInfo, int
    assert_memhandle_type(pGetFdInfo->handleType);
 
    *pFD = os_dupfd_cloexec(memory->backed_fd);
-   assert(*pFD >= 0);
    return VK_SUCCESS;
 }
 

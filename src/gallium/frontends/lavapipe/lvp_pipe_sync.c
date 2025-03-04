@@ -240,7 +240,7 @@ lvp_pipe_sync_wait(struct vk_device *vk_device,
    return result;
 }
 
-#ifdef HAVE_LIBDRM
+#ifdef DETECT_OS_LINUX
 static VkResult
 lvp_pipe_import_sync_file(struct vk_device *vk_device,
                            struct vk_sync *vk_sync,
@@ -278,7 +278,7 @@ lvp_pipe_export_sync_file(struct vk_device *vk_device,
    struct lvp_device *device = container_of(vk_device, struct lvp_device, vk);
    *sync_file = device->pscreen->fence_get_fd(device->pscreen, sync->fence);
 
-   return *sync_file != -1 ? VK_SUCCESS : VK_ERROR_OUT_OF_HOST_MEMORY;
+   return VK_SUCCESS;
 }
 #endif
 
@@ -297,7 +297,7 @@ const struct vk_sync_type lvp_pipe_sync_type = {
    .reset = lvp_pipe_sync_reset,
    .move = lvp_pipe_sync_move,
    .wait = lvp_pipe_sync_wait,
-#ifdef HAVE_LIBDRM
+#ifdef DETECT_OS_LINUX
    .import_sync_file = lvp_pipe_import_sync_file,
    .export_sync_file = lvp_pipe_export_sync_file,
 #endif
