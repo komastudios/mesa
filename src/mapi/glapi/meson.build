@@ -35,7 +35,7 @@ endif
 
 static_glapi_args += '-DMAPI_MODE_UTIL'
 if with_platform_windows
-  static_glapi_args += ['-D_GDI32_', '-DKHRONOS_DLL_EXPORTS', '-D_GLAPI_DLL_EXPORTS']
+  static_glapi_args += ['-D_GDI32_', '-DKHRONOS_DLL_EXPORTS']
 endif
 static_glapi_files += files(
   '../u_current.c',
