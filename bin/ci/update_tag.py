@@ -244,24 +244,33 @@ def run_build_script(component: str, check_only: bool = False) -> Optional[str]:
 
 
 def load_image_tags_yaml() -> YamlData:
-    try:
-        with open(CONDITIONAL_TAGS_FILE, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-            if not isinstance(data, dict):
-                return {"variables": {}}
-            if "variables" not in data:
-                data["variables"] = {}
-            return data
-    except FileNotFoundError:
-        return {"variables": {}}
+    # 0) Check if the YAML file exists
+    if not os.path.isfile(CONDITIONAL_TAGS_FILE):
+        raise FileNotFoundError(f"Conditional build image tags file not found: {CONDITIONAL_TAGS_FILE}")
+
+    with open(CONDITIONAL_TAGS_FILE, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            return {"variables": {}}
+        if "variables" not in data:
+            data["variables"] = {}
+        return data
 
 
 def get_current_tag_value(component: str) -> Optional[str]:
+    # If the CI job already set the tag, use it
+    tag_var = from_component_to_tag_var(component)
+    if os.getenv(tag_var):
+        logging.debug(f"Using tag from environment variable {tag_var}")
+        return os.getenv(tag_var)
+
+    # Otherwise, look in the YAML file, which normally occurs when updating tags locally
     full_tag_var = from_component_to_build_tag(component)
     data = load_image_tags_yaml()
     variables = data.get("variables", {})
     if not isinstance(variables, dict):
         return None
+    logging.debug(f"Using tag from YAML file {full_tag_var}")
     return variables.get(full_tag_var)
 
 
@@ -362,13 +371,6 @@ def main():
         log_level = logging.WARNING
 
     logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
-
-    # 0) Check if the YAML file exists
-    if not os.path.isfile(CONDITIONAL_TAGS_FILE):
-        logging.fatal(
-            f"Conditional build image tags file not found: {CONDITIONAL_TAGS_FILE}"
-        )
-        return
 
     # 1) If checking, just run build scripts in check mode and propagate errors
     if args.check:
