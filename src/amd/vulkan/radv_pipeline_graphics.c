@@ -1560,26 +1560,28 @@ radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages, const VkSh
 {
    /* Prepare shaders before running nir_opt_varyings. */
    radv_foreach_stage (s, active_nir_stages) {
-      nir_shader *producer = stages[s].nir;
-      const gl_shader_stage next = stages[s].info.next_stage;
-
-      if (next == MESA_SHADER_NONE)
-         continue;
-
-      nir_shader *consumer = stages[next].nir;
+      nir_shader *shader = stages[s].nir;
 
       /* It is expected by nir_opt_varyings that no undefined stores are present in the shader. */
-      NIR_PASS(_, producer, nir_opt_undef);
+      NIR_PASS(_, shader, nir_opt_undef);
 
       /* Update load/store alignments because inter-stage code motion may move instructions used to deduce this info. */
-      NIR_PASS(_, consumer, nir_opt_load_store_update_alignments);
+      NIR_PASS(_, shader, nir_opt_load_store_update_alignments);
 
-      /* Scalarize all I/O, because nir_opt_varyings and nir_opt_vectorize_io expect all I/O to be scalarized. */
-      NIR_PASS(_, producer, nir_lower_io_to_scalar, nir_var_shader_out, NULL, NULL);
-      NIR_PASS(_, consumer, nir_lower_io_to_scalar, nir_var_shader_in, NULL, NULL);
+      /* Scalarize I/O, because nir_opt_varyings and nir_opt_vectorize_io expect all I/O to be scalarized. */
+      nir_variable_mode sca_mode = nir_var_shader_in;
+      bool sca_progress = false;
+      if (s != MESA_SHADER_FRAGMENT)
+         sca_mode |= nir_var_shader_out;
+      NIR_PASS(sca_progress, shader, nir_lower_io_to_scalar, sca_mode, NULL, NULL);
 
-      /* Eliminate useless vec->mov copies resulting from scalarization. */
-      NIR_PASS(_, producer, nir_copy_prop);
+      if (sca_progress) {
+         /* Eliminate useless vec->mov copies resulting from scalarization. */
+         NIR_PASS(_, shader, nir_copy_prop);
+
+         /* Eliminate unused input loads. */
+         NIR_PASS(_, shader, nir_opt_dce);
+      }
    }
 
    int highest_changed_producer = -1;
@@ -1635,32 +1637,33 @@ radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages, const VkSh
 
    /* Run optimizations and fixups after linking. */
    radv_foreach_stage (s, active_nir_stages) {
-      nir_shader *producer = stages[s].nir;
-      const gl_shader_stage next = stages[s].info.next_stage;
+      nir_shader *shader = stages[s].nir;
 
       /* Re-vectorize I/O for stages that output to memory (LDS or VRAM).
-       * Don't vectorize FS inputs, doing so just regresses shader stats without any benefit.
+       * Don't vectorize FS I/O, doing so just regresses shader stats without any benefit.
        * There is also no benefit from re-vectorizing the outputs of the last pre-rasterization
        * stage here, because ac_nir_lower_ngg/legacy already takes care of that.
        */
-      if (next != MESA_SHADER_NONE && next != MESA_SHADER_FRAGMENT) {
-         nir_shader *consumer = stages[next].nir;
-         NIR_PASS(_, producer, nir_opt_vectorize_io, nir_var_shader_out);
-         NIR_PASS(_, consumer, nir_opt_vectorize_io, nir_var_shader_in);
+      if (s != MESA_SHADER_FRAGMENT) {
+         nir_variable_mode vec_mode = nir_var_shader_in;
+         if (!radv_is_last_vgt_stage(&stages[s]))
+            vec_mode |= nir_var_shader_out;
+
+         NIR_PASS(_, shader, nir_opt_vectorize_io, vec_mode);
       }
 
       /* Gather shader info; at least the I/O info likely changed
        * and changes to only the I/O info are not reflected in nir_opt_varyings_progress.
        */
-      nir_shader_gather_info(producer, nir_shader_get_entrypoint(producer));
+      nir_shader_gather_info(shader, nir_shader_get_entrypoint(shader));
 
       /* Recompute intrinsic bases of PS inputs in order to remove gaps. */
       if (s == MESA_SHADER_FRAGMENT)
-         radv_recompute_fs_input_bases(producer);
+         radv_recompute_fs_input_bases(shader);
 
       /* Recreate XFB info from intrinsics (nir_opt_varyings may have changed it). */
-      if (producer->xfb_info) {
-         nir_gather_xfb_info_from_intrinsics(producer);
+      if (shader->xfb_info) {
+         nir_gather_xfb_info_from_intrinsics(shader);
       }
    }
 
