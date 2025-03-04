@@ -1086,7 +1086,7 @@ struct si_context {
    /* shader information */
    uint64_t ps_inputs_read_or_disabled;
    struct si_vertex_elements *vertex_elements;
-   unsigned num_vertex_elements;
+   unsigned num_vertex_elements;  /* 0 if the VS uses blit SGPRs to compute VS inputs */
    unsigned cs_max_waves_per_sh;
    uint32_t compute_tmpring_size;
    bool vertex_elements_but_no_buffers;
