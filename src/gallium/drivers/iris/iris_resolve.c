@@ -429,8 +429,9 @@ flush_previous_aux_mode(struct iris_batch *batch,
     * to avoid extra cache flushing.
     */
    void *v_aux_usage = (void *) (uintptr_t)
-      (aux_usage == ISL_AUX_USAGE_FCV_CCS_E ?
-       ISL_AUX_USAGE_CCS_E : aux_usage);
+      (aux_usage == ISL_AUX_USAGE_FCV_CCS_E ? ISL_AUX_USAGE_CCS_E :
+       aux_usage == ISL_AUX_USAGE_HIZ_CCS_WT ? ISL_AUX_USAGE_HIZ_CCS :
+       aux_usage);
 
    struct hash_entry *entry =
       _mesa_hash_table_search_pre_hashed(batch->bo_aux_modes, bo->hash, bo);
@@ -696,19 +697,14 @@ iris_hiz_exec(struct iris_context *ice,
       name = "depth clear";
       break;
    case ISL_AUX_OP_PARTIAL_RESOLVE:
+      name = "depth partial resolve";
+      break;
    case ISL_AUX_OP_NONE:
       unreachable("Invalid HiZ op");
    }
 
    //DBG("%s %s to mt %p level %d layers %d-%d\n",
        //__func__, name, mt, level, start_layer, start_layer + num_layers - 1);
-
-   /* A data cache flush is not suggested by HW docs, but we found it to fix
-    * a number of failures.
-    */
-   unsigned wa_flush = devinfo->verx10 >= 125 &&
-                       res->aux.usage == ISL_AUX_USAGE_HIZ_CCS ?
-                       PIPE_CONTROL_DATA_CACHE_FLUSH : 0;
 
    /* The following stalls and flushes are only documented to be required
     * for HiZ clear operations.  However, they also seem to be required for
@@ -726,7 +722,6 @@ iris_hiz_exec(struct iris_context *ice,
    iris_emit_pipe_control_flush(batch,
                                 "hiz op: pre-flush",
                                 PIPE_CONTROL_DEPTH_CACHE_FLUSH |
-                                wa_flush |
                                 PIPE_CONTROL_DEPTH_STALL |
                                 PIPE_CONTROL_CS_STALL);
 
@@ -769,6 +764,23 @@ iris_hiz_exec(struct iris_context *ice,
                                    "hiz op: post flush",
                                    PIPE_CONTROL_DEPTH_CACHE_FLUSH |
                                    PIPE_CONTROL_DEPTH_STALL);
+   }
+
+   /* Additional tile cache flush which appears to be needed to
+    * guarantee that a resolved depth surface has no remaining
+    * fast-cleared blocks on DG2 as well as MTL:
+    *
+    * https://gitlab.freedesktop.org/mesa/mesa/-/issues/10420
+    * https://gitlab.freedesktop.org/mesa/mesa/-/issues/10530
+    * https://gitlab.freedesktop.org/mesa/mesa/-/issues/11315
+    */
+   if (devinfo->verx10 == 125 &&
+       res->aux.usage == ISL_AUX_USAGE_HIZ_CCS &&
+       op == ISL_AUX_OP_FULL_RESOLVE) {
+      iris_emit_pipe_control_flush(batch,
+                                   "hiz op: post-flush",
+                                   PIPE_CONTROL_DATA_CACHE_FLUSH |
+                                   PIPE_CONTROL_CS_STALL);
    }
 
    iris_batch_sync_region_end(batch);
@@ -1024,8 +1036,19 @@ iris_resource_texture_aux_usage(struct iris_context *ice,
    case ISL_AUX_USAGE_HIZ_CCS:
    case ISL_AUX_USAGE_HIZ_CCS_WT:
       assert(res->surf.format == view_format);
-      return iris_sample_with_depth_aux(devinfo, res) ?
-             res->aux.usage : ISL_AUX_USAGE_NONE;
+      /* Even if iris_sample_with_depth_aux() tells us we can't keep
+       * HiZ enabled for sampling it is possible to perform a partial
+       * resolve (supported on Gfx12.5+) which makes the CCS surface
+       * consistent with the contents of the HiZ surface, allowing us
+       * to keep CCS enabled while sampling from it.  This avoids the
+       * overhead of a full resolve, is beneficial for bandwidth
+       * consumption and avoids triggering the hardware bugs of full
+       * resolves on DG2/MTL.
+       */
+      return (iris_sample_with_depth_aux(devinfo, res) ? res->aux.usage :
+              devinfo->verx10 >= 125 && res->aux.usage == ISL_AUX_USAGE_HIZ_CCS ?
+                 ISL_AUX_USAGE_HIZ_CCS_WT :
+              ISL_AUX_USAGE_NONE);
 
    case ISL_AUX_USAGE_MCS:
    case ISL_AUX_USAGE_MCS_CCS:

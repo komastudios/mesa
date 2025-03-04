@@ -757,8 +757,10 @@ add_aux_surface_if_supported(struct anv_device *device,
             return result;
       }
 
-      if (device->info->ver == 12 &&
-          image->planes[plane].aux_usage == ISL_AUX_USAGE_HIZ_CCS_WT) {
+      if ((device->info->verx10 == 120 &&
+           image->planes[plane].aux_usage == ISL_AUX_USAGE_HIZ_CCS_WT) ||
+          (device->info->verx10 == 125 &&
+           isl_aux_usage_has_ccs(image->planes[plane].aux_usage))) {
          return add_aux_state_tracking_buffer(device, image, aux_state_offset,
                                               plane);
       }
@@ -3166,6 +3168,7 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
 
    bool aux_supported = true;
    bool clear_supported = isl_aux_usage_has_fast_clears(aux_usage);
+   bool hiz_supported = true;
 
    if ((usage & (VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
                  VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT)) &&
@@ -3182,6 +3185,7 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
       if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT && devinfo->ver <= 9) {
          aux_supported = false;
          clear_supported = false;
+         hiz_supported = false;
       }
    }
 
@@ -3193,15 +3197,20 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
          if (!anv_can_sample_with_hiz(devinfo, image)) {
             aux_supported = false;
             clear_supported = false;
+            hiz_supported = false;
          }
          break;
 
       case ISL_AUX_USAGE_HIZ_CCS:
-         aux_supported = false;
-         clear_supported = false;
+         if (devinfo->verx10 < 125) {
+            aux_supported = false;
+            clear_supported = false;
+         }
+         hiz_supported = false;
          break;
 
       case ISL_AUX_USAGE_HIZ_CCS_WT:
+         hiz_supported = false;
          break;
 
       case ISL_AUX_USAGE_CCS_D:
@@ -3229,7 +3238,9 @@ anv_layout_to_aux_state(const struct intel_device_info * const devinfo,
    case ISL_AUX_USAGE_HIZ:
    case ISL_AUX_USAGE_HIZ_CCS:
    case ISL_AUX_USAGE_HIZ_CCS_WT:
-      if (aux_supported) {
+      if (hiz_supported && aux_usage != ISL_AUX_USAGE_HIZ_CCS_WT) {
+         return ISL_AUX_STATE_COMPRESSED_HIER_DEPTH;
+      } else if (aux_supported) {
          assert(clear_supported);
          return ISL_AUX_STATE_COMPRESSED_CLEAR;
       } else if (read_only) {
@@ -3320,9 +3331,16 @@ anv_layout_to_aux_usage(const struct intel_device_info * const devinfo,
       assert(image->vk.samples == 1);
       return ISL_AUX_USAGE_CCS_D;
 
+   case ISL_AUX_STATE_COMPRESSED_HIER_DEPTH:
+      return image->planes[plane].aux_usage;
+
    case ISL_AUX_STATE_COMPRESSED_CLEAR:
    case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
-      return image->planes[plane].aux_usage;
+      if (devinfo->verx10 >= 125 &&
+          image->planes[plane].aux_usage == ISL_AUX_USAGE_HIZ_CCS)
+         return ISL_AUX_USAGE_HIZ_CCS_WT;
+      else
+         return image->planes[plane].aux_usage;
 
    case ISL_AUX_STATE_RESOLVED:
       /* We can only use RESOLVED in read-only layouts because any write will
@@ -3342,6 +3360,12 @@ anv_layout_to_aux_usage(const struct intel_device_info * const devinfo,
       }
 
    case ISL_AUX_STATE_PASS_THROUGH:
+      if (devinfo->verx10 >= 125 &&
+          (image->vk.aspects & VK_IMAGE_ASPECT_DEPTH_BIT))
+         return ISL_AUX_USAGE_HIZ_CCS_WT;
+      else
+         return ISL_AUX_USAGE_NONE;
+
    case ISL_AUX_STATE_AUX_INVALID:
       return ISL_AUX_USAGE_NONE;
    }
@@ -3393,6 +3417,7 @@ anv_layout_to_fast_clear_type(const struct intel_device_info * const devinfo,
 
    switch (aux_state) {
    case ISL_AUX_STATE_CLEAR:
+   case ISL_AUX_STATE_COMPRESSED_HIER_DEPTH:
       unreachable("We never use this state");
 
    case ISL_AUX_STATE_PARTIAL_CLEAR:
