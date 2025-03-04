@@ -267,6 +267,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_depth_range_unrestricted          = device->info.ver >= 20,
       .EXT_descriptor_buffer                 = true,
       .EXT_descriptor_indexing               = true,
+      .EXT_device_memory_report              = true,
 #ifdef VK_USE_PLATFORM_DISPLAY_KHR
       .EXT_display_control                   = true,
 #endif
@@ -578,6 +579,9 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_EXT_depth_clip_enable */
       .depthClipEnable = true,
 
+      /* VK_EXT_device_memory_report */
+      .deviceMemoryReport = true,
+
       /* VK_EXT_fragment_shader_interlock */
       .fragmentShaderSampleInterlock = true,
       .fragmentShaderPixelInterlock = true,
@@ -585,6 +589,9 @@ get_features(const struct anv_physical_device *pdevice,
 
       /* VK_EXT_global_priority_query */
       .globalPriorityQuery = true,
+
+      /* VK_EXT_device_memory_report */
+      .deviceMemoryReport = true,
 
       /* VK_EXT_graphics_pipeline_library */
       .graphicsPipelineLibrary =
