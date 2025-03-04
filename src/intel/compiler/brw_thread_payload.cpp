@@ -419,7 +419,6 @@ brw_cs_thread_payload::load_subgroup_id(const brw_builder &bld,
 }
 
 brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
-   : brw_cs_thread_payload(v)
 {
    /* Task and Mesh Shader Payloads (SIMD8 and SIMD16)
     *
@@ -440,10 +439,15 @@ brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
     * the address to descriptors.
     */
 
+   {
+      struct brw_cs_prog_data *prog_data = brw_cs_prog_data(v.prog_data);
+      prog_data->uses_inline_push_addr = v.key->uses_inline_push_addr;
+      assert(prog_data->generate_local_id == 0);
+   }
+
    const brw_builder bld = brw_builder(&v).at_end();
 
    unsigned r = 0;
-   assert(subgroup_id_.file != BAD_FILE);
    extended_parameter_0 = retype(brw_vec1_grf(0, 3), BRW_TYPE_UD);
 
    if (v.devinfo->ver >= 20) {

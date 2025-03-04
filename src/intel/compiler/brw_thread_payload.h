@@ -83,8 +83,10 @@ protected:
    brw_reg subgroup_id_;
 };
 
-struct brw_task_mesh_thread_payload : public brw_cs_thread_payload {
+struct brw_task_mesh_thread_payload : public brw_thread_payload {
    brw_task_mesh_thread_payload(brw_shader &v);
+
+   brw_reg inline_parameter;
 
    brw_reg extended_parameter_0;
    brw_reg local_index;

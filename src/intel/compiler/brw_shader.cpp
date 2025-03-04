@@ -605,6 +605,15 @@ round_components_to_whole_registers(const intel_device_info *devinfo,
    return DIV_ROUND_UP(c, 8 * reg_unit(devinfo)) * reg_unit(devinfo);
 }
 
+static brw_reg
+brw_get_inline_parameter(brw_shader &s)
+{
+   if (gl_shader_stage_is_rt(s.stage))      return s.bs_payload().inline_parameter;
+   if (gl_shader_stage_is_compute(s.stage)) return s.cs_payload().inline_parameter;
+   if (gl_shader_stage_is_mesh(s.stage))    return s.task_mesh_payload().inline_parameter;
+  unreachable("invalid stage");
+}
+
 void
 brw_shader::assign_curb_setup()
 {
@@ -649,10 +658,7 @@ brw_shader::assign_curb_setup()
          /* The address of the push constants is at offset 0 in the inline
           * parameter.
           */
-         base_addr =
-            gl_shader_stage_is_rt(stage) ?
-            retype(bs_payload().inline_parameter, BRW_TYPE_UQ) :
-            retype(cs_payload().inline_parameter, BRW_TYPE_UQ);
+         base_addr = retype(brw_get_inline_parameter(*this), BRW_TYPE_UQ);
       } else {
          /* The base offset for our push data is passed in as R0.0[31:6]. We
           * have to mask off the bottom 6 bits.
