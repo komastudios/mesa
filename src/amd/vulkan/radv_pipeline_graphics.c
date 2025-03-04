@@ -1582,6 +1582,8 @@ radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages, const VkSh
       NIR_PASS(_, producer, nir_copy_prop);
    }
 
+   int highest_changed_producer = -1;
+
    /* Optimize varyings from first to last stage. */
    for (int i = 0; i < ARRAY_SIZE(graphics_shader_order); ++i) {
       const gl_shader_stage s = graphics_shader_order[i];
@@ -1600,6 +1602,7 @@ radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages, const VkSh
       /* Run algebraic optimizations on shaders that changed. */
       if (p & nir_progress_producer) {
          radv_optimize_nir_algebraic(producer, false, false);
+         highest_changed_producer = i;
       }
       if (p & nir_progress_consumer) {
          radv_optimize_nir_algebraic(consumer, false, false);
@@ -1607,7 +1610,7 @@ radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages, const VkSh
    }
 
    /* Optimize varyings from last to first stage. */
-   for (int i = ARRAY_SIZE(graphics_shader_order) - 1; i >= 0; --i) {
+   for (int i = highest_changed_producer; i >= 0; --i) {
       const gl_shader_stage s = graphics_shader_order[i];
       const gl_shader_stage next = stages[s].info.next_stage;
       if (!stages[s].nir || next == MESA_SHADER_NONE)
