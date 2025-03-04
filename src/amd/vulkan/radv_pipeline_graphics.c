@@ -1556,7 +1556,7 @@ radv_graphics_shaders_fill_linked_io_info(struct radv_shader_stage *producer_sta
  * than running the same optimizations on I/O derefs.
  */
 static void
-radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages)
+radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages, const VkShaderStageFlagBits active_nir_stages)
 {
    /* Optimize varyings from first to last stage. */
    gl_shader_stage prev = MESA_SHADER_NONE;
@@ -2712,7 +2712,7 @@ radv_graphics_shaders_compile(struct radv_device *device, struct vk_pipeline_cac
    }
 
    /* Optimize varyings on lowered shader I/O (more efficient than optimizing I/O derefs). */
-   radv_graphics_shaders_link_varyings(stages);
+   radv_graphics_shaders_link_varyings(stages, active_nir_stages);
 
    /* Optimize constant clip/cull distance after linking to operate on scalar io in the last
     * pre raster stage.
