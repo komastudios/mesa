@@ -11,23 +11,20 @@ struct brw_shader;
 class brw_builder;
 
 struct brw_thread_payload {
-   /** The number of thread payload registers the hardware will supply. */
-   uint8_t num_regs;
-
    virtual ~brw_thread_payload() = default;
 
 protected:
-   brw_thread_payload() : num_regs() {}
+   brw_thread_payload() {}
 };
 
 struct brw_vs_thread_payload : public brw_thread_payload {
-   brw_vs_thread_payload(const brw_shader &v);
+   brw_vs_thread_payload(brw_shader &v);
 
    brw_reg urb_handles;
 };
 
 struct brw_tcs_thread_payload : public brw_thread_payload {
-   brw_tcs_thread_payload(const brw_shader &v);
+   brw_tcs_thread_payload(brw_shader &v);
 
    brw_reg patch_urb_output;
    brw_reg primitive_id;
@@ -35,7 +32,7 @@ struct brw_tcs_thread_payload : public brw_thread_payload {
 };
 
 struct brw_tes_thread_payload : public brw_thread_payload {
-   brw_tes_thread_payload(const brw_shader &v);
+   brw_tes_thread_payload(brw_shader &v);
 
    brw_reg patch_urb_input;
    brw_reg primitive_id;
@@ -53,7 +50,7 @@ struct brw_gs_thread_payload : public brw_thread_payload {
 };
 
 struct brw_fs_thread_payload : public brw_thread_payload {
-   brw_fs_thread_payload(const brw_shader &v,
+   brw_fs_thread_payload(brw_shader &v,
                      bool &source_depth_to_render_target);
 
    uint8_t subspan_coord_reg[2];
@@ -71,7 +68,7 @@ struct brw_fs_thread_payload : public brw_thread_payload {
 };
 
 struct brw_cs_thread_payload : public brw_thread_payload {
-   brw_cs_thread_payload(const brw_shader &v);
+   brw_cs_thread_payload(brw_shader &v);
 
    void load_subgroup_id(const brw_builder &bld, brw_reg &dest) const;
 
@@ -98,7 +95,7 @@ struct brw_task_mesh_thread_payload : public brw_thread_payload {
 };
 
 struct brw_bs_thread_payload : public brw_thread_payload {
-   brw_bs_thread_payload(const brw_shader &v);
+   brw_bs_thread_payload(brw_shader &v);
 
    brw_reg inline_parameter;
 

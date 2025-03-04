@@ -342,9 +342,9 @@ brw_compile_vs(const struct brw_compiler *compiler,
       return NULL;
    }
 
-   assert(v.payload().num_regs % reg_unit(compiler->devinfo) == 0);
+   assert(v.num_payload_regs % reg_unit(compiler->devinfo) == 0);
    prog_data->base.base.dispatch_grf_start_reg =
-      v.payload().num_regs / reg_unit(compiler->devinfo);
+      v.num_payload_regs / reg_unit(compiler->devinfo);
    prog_data->base.base.grf_used = v.grf_used;
 
    brw_generator g(compiler, &params->base,

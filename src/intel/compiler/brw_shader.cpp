@@ -441,6 +441,7 @@ brw_shader::init()
    this->payload_ = NULL;
    this->source_depth_to_render_target = false;
    this->first_non_payload_grf = 0;
+   this->num_payload_regs = 0;
 
    this->uniforms = 0;
    this->last_scratch = 0;
@@ -709,7 +710,7 @@ brw_shader::assign_curb_setup()
             {},            /* payload2 */
          };
 
-         brw_reg dest = retype(brw_vec8_grf(payload().num_regs + i, 0),
+         brw_reg dest = retype(brw_vec8_grf(num_payload_regs + i, 0),
                               BRW_TYPE_UD);
          brw_inst *send = ubld.emit(SHADER_OPCODE_SEND, dest, srcs, 4);
 
@@ -728,8 +729,8 @@ brw_shader::assign_curb_setup()
             LSC_ADDR_SIZE_A64 : LSC_ADDR_SIZE_A32, 1);
          send->size_written =
             lsc_msg_dest_len(devinfo, LSC_DATA_SIZE_D32, num_regs * 8) * REG_SIZE;
-         assert((payload().num_regs + i + send->size_written / REG_SIZE) <=
-                (payload().num_regs + prog_data->curb_read_length));
+         assert((num_payload_regs + i + send->size_written / REG_SIZE) <=
+                (num_payload_regs + prog_data->curb_read_length));
          send->send_is_volatile = true;
 
          send->src[0] = brw_imm_ud(desc |
@@ -768,7 +769,7 @@ brw_shader::assign_curb_setup()
             assert(constant_nr / 8 < 64);
             used |= BITFIELD64_BIT(constant_nr / 8);
 
-	    struct brw_reg brw_reg = brw_vec1_grf(payload().num_regs +
+	    struct brw_reg brw_reg = brw_vec1_grf(num_payload_regs +
 						  constant_nr / 8,
 						  constant_nr % 8);
             brw_reg.abs = inst->src[i].abs;
@@ -793,7 +794,7 @@ brw_shader::assign_curb_setup()
 
       /* push_reg_mask_param is in 32-bit units */
       unsigned mask_param = prog_data->push_reg_mask_param;
-      struct brw_reg mask = brw_vec1_grf(payload().num_regs + mask_param / 8,
+      struct brw_reg mask = brw_vec1_grf(num_payload_regs + mask_param / 8,
                                                               mask_param % 8);
 
       brw_reg b32 = {};
@@ -813,7 +814,7 @@ brw_shader::assign_curb_setup()
          if (want_zero & BITFIELD64_BIT(i)) {
             assert(i < prog_data->curb_read_length);
             struct brw_reg push_reg =
-               retype(brw_vec8_grf(payload().num_regs + i, 0), BRW_TYPE_D);
+               retype(brw_vec8_grf(num_payload_regs + i, 0), BRW_TYPE_D);
 
             ubld.AND(push_reg, push_reg, component(b32, i % 16));
          }
@@ -823,7 +824,7 @@ brw_shader::assign_curb_setup()
    }
 
    /* This may be updated in assign_urb_setup or assign_vs_urb_setup. */
-   this->first_non_payload_grf = payload().num_regs + prog_data->curb_read_length;
+   this->first_non_payload_grf = num_payload_regs + prog_data->curb_read_length;
 }
 
 /*
@@ -856,7 +857,7 @@ brw_shader::convert_attr_sources_to_hw_regs(brw_inst *inst)
    for (int i = 0; i < inst->sources; i++) {
       if (inst->src[i].file == ATTR) {
          assert(inst->src[i].nr == 0);
-         int grf = payload().num_regs +
+         int grf = num_payload_regs +
                    prog_data->curb_read_length +
                    inst->src[i].offset / REG_SIZE;
 

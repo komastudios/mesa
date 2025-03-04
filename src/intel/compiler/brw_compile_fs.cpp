@@ -661,7 +661,7 @@ brw_emit_repclear_shader(brw_shader &s)
 
    brw_calculate_cfg(s);
 
-   s.first_non_payload_grf = s.payload().num_regs;
+   s.first_non_payload_grf = s.num_payload_regs;
 
    brw_lower_scoreboard(s);
 }
@@ -1275,7 +1275,7 @@ brw_assign_urb_setup(brw_shader &s)
    const struct intel_device_info *devinfo = s.devinfo;
    struct brw_wm_prog_data *prog_data = brw_wm_prog_data(s.prog_data);
 
-   int urb_start = s.payload().num_regs + prog_data->base.curb_read_length;
+   int urb_start = s.num_payload_regs + prog_data->base.curb_read_length;
 
    /* Offset all the urb_setup[] index by the actual position of the
     * setup regs, now that the location of the constants has been chosen.
@@ -1598,8 +1598,8 @@ brw_compile_fs(const struct brw_compiler *compiler,
       } else if (INTEL_SIMD(FS, 8)) {
          simd8_cfg = v8->cfg;
 
-         assert(v8->payload().num_regs % reg_unit(devinfo) == 0);
-         prog_data->base.dispatch_grf_start_reg = v8->payload().num_regs / reg_unit(devinfo);
+         assert(v8->num_payload_regs % reg_unit(devinfo) == 0);
+         prog_data->base.dispatch_grf_start_reg = v8->num_payload_regs / reg_unit(devinfo);
          prog_data->base.grf_used = MAX2(prog_data->base.grf_used,
                                          v8->grf_used);
 
@@ -1708,8 +1708,8 @@ brw_compile_fs(const struct brw_compiler *compiler,
                vbase = v32.get();
 
             simd32_cfg = v32->cfg;
-            assert(v32->payload().num_regs % reg_unit(devinfo) == 0);
-            prog_data->dispatch_grf_start_reg_32 = v32->payload().num_regs / reg_unit(devinfo);
+            assert(v32->num_payload_regs % reg_unit(devinfo) == 0);
+            prog_data->dispatch_grf_start_reg_32 = v32->num_payload_regs / reg_unit(devinfo);
             prog_data->base.grf_used = MAX2(prog_data->base.grf_used,
                                             v32->grf_used);
          }
@@ -1729,8 +1729,8 @@ brw_compile_fs(const struct brw_compiler *compiler,
          } else {
             simd16_cfg = v16->cfg;
 
-            assert(v16->payload().num_regs % reg_unit(devinfo) == 0);
-            prog_data->dispatch_grf_start_reg_16 = v16->payload().num_regs / reg_unit(devinfo);
+            assert(v16->num_payload_regs % reg_unit(devinfo) == 0);
+            prog_data->dispatch_grf_start_reg_16 = v16->num_payload_regs / reg_unit(devinfo);
             prog_data->base.grf_used = MAX2(prog_data->base.grf_used,
                                             v16->grf_used);
          }
@@ -1754,8 +1754,8 @@ brw_compile_fs(const struct brw_compiler *compiler,
          } else {
             simd16_cfg = v16->cfg;
 
-            assert(v16->payload().num_regs % reg_unit(devinfo) == 0);
-            prog_data->dispatch_grf_start_reg_16 = v16->payload().num_regs / reg_unit(devinfo);
+            assert(v16->num_payload_regs % reg_unit(devinfo) == 0);
+            prog_data->dispatch_grf_start_reg_16 = v16->num_payload_regs / reg_unit(devinfo);
             prog_data->base.grf_used = MAX2(prog_data->base.grf_used,
                                             v16->grf_used);
 
@@ -1797,8 +1797,8 @@ brw_compile_fs(const struct brw_compiler *compiler,
             } else {
                simd32_cfg = v32->cfg;
 
-               assert(v32->payload().num_regs % reg_unit(devinfo) == 0);
-               prog_data->dispatch_grf_start_reg_32 = v32->payload().num_regs / reg_unit(devinfo);
+               assert(v32->num_payload_regs % reg_unit(devinfo) == 0);
+               prog_data->dispatch_grf_start_reg_32 = v32->num_payload_regs / reg_unit(devinfo);
                prog_data->base.grf_used = MAX2(prog_data->base.grf_used,
                                                v32->grf_used);
 
@@ -1875,8 +1875,8 @@ brw_compile_fs(const struct brw_compiler *compiler,
    }
 
    if (multi_cfg) {
-      assert(vmulti->payload().num_regs % reg_unit(devinfo) == 0);
-      prog_data->base.dispatch_grf_start_reg = vmulti->payload().num_regs / reg_unit(devinfo);
+      assert(vmulti->num_payload_regs % reg_unit(devinfo) == 0);
+      prog_data->base.dispatch_grf_start_reg = vmulti->num_payload_regs / reg_unit(devinfo);
       prog_data->base.grf_used = MAX2(prog_data->base.grf_used,
                                       vmulti->grf_used);
    }

@@ -24,7 +24,7 @@
 #include "brw_shader.h"
 #include "brw_builder.h"
 
-brw_vs_thread_payload::brw_vs_thread_payload(const brw_shader &v)
+brw_vs_thread_payload::brw_vs_thread_payload(brw_shader &v)
 {
    unsigned r = 0;
 
@@ -35,10 +35,10 @@ brw_vs_thread_payload::brw_vs_thread_payload(const brw_shader &v)
    urb_handles = brw_ud8_grf(r, 0);
    r += reg_unit(v.devinfo);
 
-   num_regs = r;
+   v.num_payload_regs = r;
 }
 
-brw_tcs_thread_payload::brw_tcs_thread_payload(const brw_shader &v)
+brw_tcs_thread_payload::brw_tcs_thread_payload(brw_shader &v)
 {
    struct brw_vue_prog_data *vue_prog_data = brw_vue_prog_data(v.prog_data);
    struct brw_tcs_prog_data *tcs_prog_data = brw_tcs_prog_data(v.prog_data);
@@ -51,7 +51,7 @@ brw_tcs_thread_payload::brw_tcs_thread_payload(const brw_shader &v)
       /* r1-r4 contain the ICP handles. */
       icp_handle_start = brw_ud8_grf(1, 0);
 
-      num_regs = 5;
+      v.num_payload_regs = 5;
    } else {
       assert(vue_prog_data->dispatch_mode == INTEL_DISPATCH_MODE_TCS_MULTI_PATCH);
       assert(tcs_key->input_vertices <= BRW_MAX_TCS_INPUT_VERTICES);
@@ -74,11 +74,11 @@ brw_tcs_thread_payload::brw_tcs_thread_payload(const brw_shader &v)
       icp_handle_start = brw_ud8_grf(r, 0);
       r += brw_tcs_prog_key_input_vertices(tcs_key) * reg_unit(v.devinfo);
 
-      num_regs = r;
+      v.num_payload_regs = r;
    }
 }
 
-brw_tes_thread_payload::brw_tes_thread_payload(const brw_shader &v)
+brw_tes_thread_payload::brw_tes_thread_payload(brw_shader &v)
 {
    unsigned r = 0;
 
@@ -97,7 +97,7 @@ brw_tes_thread_payload::brw_tes_thread_payload(const brw_shader &v)
    urb_output = brw_ud8_grf(r, 0);
    r += reg_unit(v.devinfo);
 
-   num_regs = r;
+   v.num_payload_regs = r;
 }
 
 brw_gs_thread_payload::brw_gs_thread_payload(brw_shader &v)
@@ -139,7 +139,7 @@ brw_gs_thread_payload::brw_gs_thread_payload(brw_shader &v)
    icp_handle_start = brw_ud8_grf(r, 0);
    r += v.nir->info.gs.vertices_in * reg_unit(v.devinfo);
 
-   num_regs = r;
+   v.num_payload_regs = r;
 
    /* Use a maximum of 24 registers for push-model inputs. */
    const unsigned max_push_components = 24;
@@ -159,7 +159,7 @@ brw_gs_thread_payload::brw_gs_thread_payload(brw_shader &v)
 
 static inline void
 setup_fs_payload_gfx20(brw_fs_thread_payload &payload,
-                       const brw_shader &v,
+                       brw_shader &v,
                        bool &source_depth_to_render_target)
 {
    struct brw_wm_prog_data *prog_data = brw_wm_prog_data(v.prog_data);
@@ -169,8 +169,8 @@ setup_fs_payload_gfx20(brw_fs_thread_payload &payload,
 
    for (unsigned j = 0; j < v.dispatch_width / payload_width; j++) {
       /* R0-1: PS thread payload header, masks and pixel X/Y coordinates. */
-      payload.num_regs++;
-      payload.subspan_coord_reg[j] = payload.num_regs++;
+      v.num_payload_regs++;
+      payload.subspan_coord_reg[j] = v.num_payload_regs++;
    }
 
    for (unsigned j = 0; j < v.dispatch_width / payload_width; j++) {
@@ -182,29 +182,29 @@ setup_fs_payload_gfx20(brw_fs_thread_payload &payload,
        */
       for (int i = 0; i < INTEL_BARYCENTRIC_MODE_COUNT; ++i) {
          if (prog_data->barycentric_interp_modes & (1 << i)) {
-            payload.barycentric_coord_reg[i][j] = payload.num_regs;
-            payload.num_regs += payload_width / 4;
+            payload.barycentric_coord_reg[i][j] = v.num_payload_regs;
+            v.num_payload_regs += payload_width / 4;
          }
       }
 
       /* R14: Interpolated depth if "Pixel Shader Uses Source Depth" is set. */
       if (prog_data->uses_src_depth) {
-         payload.source_depth_reg[j] = payload.num_regs;
-         payload.num_regs += payload_width / 8;
+         payload.source_depth_reg[j] = v.num_payload_regs;
+         v.num_payload_regs += payload_width / 8;
       }
 
       /* R15: Interpolated W if "Pixel Shader Uses Source W" is set. */
       if (prog_data->uses_src_w) {
-         payload.source_w_reg[j] = payload.num_regs;
-         payload.num_regs += payload_width / 8;
+         payload.source_w_reg[j] = v.num_payload_regs;
+         v.num_payload_regs += payload_width / 8;
       }
 
       /* R16: MSAA input coverage mask if "Pixel Shader Uses Input
        * Coverage Mask" is set.
        */
       if (prog_data->uses_sample_mask) {
-         payload.sample_mask_in_reg[j] = payload.num_regs;
-         payload.num_regs += payload_width / 8;
+         payload.sample_mask_in_reg[j] = v.num_payload_regs;
+         v.num_payload_regs += payload_width / 8;
       }
 
       /* R19: MSAA position XY offsets if "Position XY Offset Select"
@@ -214,15 +214,15 @@ setup_fs_payload_gfx20(brw_fs_thread_payload &payload,
        */
       if (prog_data->uses_pos_offset && j == 0) {
          for (unsigned k = 0; k < 2; k++) {
-            payload.sample_pos_reg[k] = payload.num_regs;
-            payload.num_regs++;
+            payload.sample_pos_reg[k] = v.num_payload_regs;
+            v.num_payload_regs++;
          }
       }
 
       /* R22: Sample offsets. */
       if (prog_data->uses_sample_offsets && j == 0) {
-         payload.sample_offsets_reg = payload.num_regs;
-         payload.num_regs += 2;
+         payload.sample_offsets_reg = v.num_payload_regs;
+         v.num_payload_regs += 2;
       }
    }
 
@@ -231,14 +231,14 @@ setup_fs_payload_gfx20(brw_fs_thread_payload &payload,
     */
    if (prog_data->uses_depth_w_coefficients ||
        prog_data->uses_pc_bary_coefficients) {
-      payload.depth_w_coef_reg = payload.pc_bary_coef_reg = payload.num_regs;
-      payload.num_regs += 2 * v.max_polygons;
+      payload.depth_w_coef_reg = payload.pc_bary_coef_reg = v.num_payload_regs;
+      v.num_payload_regs += 2 * v.max_polygons;
    }
 
    /* RP4: Non-Perspective Bary planes. */
    if (prog_data->uses_npc_bary_coefficients) {
-      payload.npc_bary_coef_reg = payload.num_regs;
-      payload.num_regs += 2 * v.max_polygons;
+      payload.npc_bary_coef_reg = v.num_payload_regs;
+      v.num_payload_regs += 2 * v.max_polygons;
    }
 
    if (v.nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
@@ -248,7 +248,7 @@ setup_fs_payload_gfx20(brw_fs_thread_payload &payload,
 
 static inline void
 setup_fs_payload_gfx9(brw_fs_thread_payload &payload,
-                      const brw_shader &v,
+                      brw_shader &v,
                       bool &source_depth_to_render_target)
 {
    struct brw_wm_prog_data *prog_data = brw_wm_prog_data(v.prog_data);
@@ -257,14 +257,14 @@ setup_fs_payload_gfx9(brw_fs_thread_payload &payload,
    assert(v.dispatch_width % payload_width == 0);
    assert(v.devinfo->ver < 20);
 
-   payload.num_regs = 0;
+   v.num_payload_regs = 0;
 
    /* R0: PS thread payload header. */
-   payload.num_regs++;
+   v.num_payload_regs++;
 
    for (unsigned j = 0; j < v.dispatch_width / payload_width; j++) {
       /* R1: masks, pixel X/Y coordinates. */
-      payload.subspan_coord_reg[j] = payload.num_regs++;
+      payload.subspan_coord_reg[j] = v.num_payload_regs++;
    }
 
    for (unsigned j = 0; j < v.dispatch_width / payload_width; j++) {
@@ -277,58 +277,58 @@ setup_fs_payload_gfx9(brw_fs_thread_payload &payload,
        */
       for (int i = 0; i < INTEL_BARYCENTRIC_MODE_COUNT; ++i) {
          if (prog_data->barycentric_interp_modes & (1 << i)) {
-            payload.barycentric_coord_reg[i][j] = payload.num_regs;
-            payload.num_regs += payload_width / 4;
+            payload.barycentric_coord_reg[i][j] = v.num_payload_regs;
+            v.num_payload_regs += payload_width / 4;
          }
       }
 
       /* R27-28: interpolated depth if uses source depth */
       if (prog_data->uses_src_depth) {
-         payload.source_depth_reg[j] = payload.num_regs;
-         payload.num_regs += payload_width / 8;
+         payload.source_depth_reg[j] = v.num_payload_regs;
+         v.num_payload_regs += payload_width / 8;
       }
 
       /* R29-30: interpolated W set if GFX6_WM_USES_SOURCE_W. */
       if (prog_data->uses_src_w) {
-         payload.source_w_reg[j] = payload.num_regs;
-         payload.num_regs += payload_width / 8;
+         payload.source_w_reg[j] = v.num_payload_regs;
+         v.num_payload_regs += payload_width / 8;
       }
 
       /* R31: MSAA position offsets. */
       if (prog_data->uses_pos_offset) {
-         payload.sample_pos_reg[j] = payload.num_regs;
-         payload.num_regs++;
+         payload.sample_pos_reg[j] = v.num_payload_regs;
+         v.num_payload_regs++;
       }
 
       /* R32-33: MSAA input coverage mask */
       if (prog_data->uses_sample_mask) {
-         payload.sample_mask_in_reg[j] = payload.num_regs;
-         payload.num_regs += payload_width / 8;
+         payload.sample_mask_in_reg[j] = v.num_payload_regs;
+         v.num_payload_regs += payload_width / 8;
       }
    }
 
    /* R66: Source Depth and/or W Attribute Vertex Deltas. */
    if (prog_data->uses_depth_w_coefficients) {
-      payload.depth_w_coef_reg = payload.num_regs;
-      payload.num_regs += v.max_polygons;
+      payload.depth_w_coef_reg = v.num_payload_regs;
+      v.num_payload_regs += v.max_polygons;
    }
 
    /* R68: Perspective bary planes. */
    if (prog_data->uses_pc_bary_coefficients) {
-      payload.pc_bary_coef_reg = payload.num_regs;
-      payload.num_regs += v.max_polygons;
+      payload.pc_bary_coef_reg = v.num_payload_regs;
+      v.num_payload_regs += v.max_polygons;
    }
 
    /* R70: Non-perspective bary planes. */
    if (prog_data->uses_npc_bary_coefficients) {
-      payload.npc_bary_coef_reg = payload.num_regs;
-      payload.num_regs += v.max_polygons;
+      payload.npc_bary_coef_reg = v.num_payload_regs;
+      v.num_payload_regs += v.max_polygons;
    }
 
    /* R72: Sample offsets. */
    if (prog_data->uses_sample_offsets) {
-      payload.sample_offsets_reg = payload.num_regs;
-      payload.num_regs++;
+      payload.sample_offsets_reg = v.num_payload_regs;
+      v.num_payload_regs++;
    }
 
    if (v.nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
@@ -336,7 +336,7 @@ setup_fs_payload_gfx9(brw_fs_thread_payload &payload,
    }
 }
 
-brw_fs_thread_payload::brw_fs_thread_payload(const brw_shader &v,
+brw_fs_thread_payload::brw_fs_thread_payload(brw_shader &v,
                                      bool &source_depth_to_render_target)
   : subspan_coord_reg(),
     source_depth_reg(),
@@ -356,7 +356,7 @@ brw_fs_thread_payload::brw_fs_thread_payload(const brw_shader &v,
       setup_fs_payload_gfx9(*this, v, source_depth_to_render_target);
 }
 
-brw_cs_thread_payload::brw_cs_thread_payload(const brw_shader &v)
+brw_cs_thread_payload::brw_cs_thread_payload(brw_shader &v)
    : local_invocation_id(),
      inline_parameter(),
      subgroup_id_()
@@ -396,7 +396,7 @@ brw_cs_thread_payload::brw_cs_thread_payload(const brw_shader &v)
       assert(!prog_data->uses_inline_push_addr);
    }
 
-   num_regs = r;
+   v.num_payload_regs = r;
 }
 
 void
@@ -419,6 +419,7 @@ brw_cs_thread_payload::load_subgroup_id(const brw_builder &bld,
 }
 
 brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
+   : inline_parameter()
 {
    /* Task and Mesh Shader Payloads (SIMD8 and SIMD16)
     *
@@ -485,10 +486,10 @@ brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
       r += reg_unit(v.devinfo);
    }
 
-   num_regs = r;
+   v.num_payload_regs = r;
 }
 
-brw_bs_thread_payload::brw_bs_thread_payload(const brw_shader &v)
+brw_bs_thread_payload::brw_bs_thread_payload(brw_shader &v)
 {
    struct brw_bs_prog_data *prog_data = brw_bs_prog_data(v.prog_data);
 
@@ -507,7 +508,7 @@ brw_bs_thread_payload::brw_bs_thread_payload(const brw_shader &v)
    local_arg_ptr = brw_ud1_grf(r, 2);
    r += reg_unit(v.devinfo);
 
-   num_regs = r;
+   v.num_payload_regs = r;
 }
 
 void

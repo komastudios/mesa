@@ -153,6 +153,9 @@ public:
    brw_reg dual_src_output = {};
    int first_non_payload_grf;
 
+   /** The number of thread payload registers the hardware will supply. */
+   unsigned num_payload_regs;
+
    enum brw_shader_phase phase;
 
    bool failed;
@@ -171,7 +174,6 @@ public:
       return *static_cast<const TYPE *>(this->payload_); \
    }
 
-   DEFINE_PAYLOAD_ACCESSOR(brw_thread_payload,     payload,     true);
    DEFINE_PAYLOAD_ACCESSOR(brw_vs_thread_payload,  vs_payload,  stage == MESA_SHADER_VERTEX);
    DEFINE_PAYLOAD_ACCESSOR(brw_tcs_thread_payload, tcs_payload, stage == MESA_SHADER_TESS_CTRL);
    DEFINE_PAYLOAD_ACCESSOR(brw_tes_thread_payload, tes_payload, stage == MESA_SHADER_TESS_EVAL);

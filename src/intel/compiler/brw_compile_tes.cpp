@@ -161,8 +161,8 @@ brw_compile_tes(const struct brw_compiler *compiler,
       return NULL;
    }
 
-   assert(v.payload().num_regs % reg_unit(devinfo) == 0);
-   prog_data->base.base.dispatch_grf_start_reg = v.payload().num_regs / reg_unit(devinfo);
+   assert(v.num_payload_regs % reg_unit(devinfo) == 0);
+   prog_data->base.base.dispatch_grf_start_reg = v.num_payload_regs / reg_unit(devinfo);
    prog_data->base.base.grf_used = v.grf_used;
    prog_data->base.dispatch_mode = INTEL_DISPATCH_MODE_SIMD8;
 
