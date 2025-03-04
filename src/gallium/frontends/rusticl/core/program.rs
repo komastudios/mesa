@@ -219,6 +219,12 @@ impl ProgramBuild {
 
         nir.unwrap()
     }
+
+    pub fn has_successful_build(&self) -> bool {
+        self.builds
+            .values()
+            .any(|b| b.status == CL_BUILD_SUCCESS as cl_build_status)
+    }
 }
 
 #[derive(Default)]
