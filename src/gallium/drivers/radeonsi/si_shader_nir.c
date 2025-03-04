@@ -222,36 +222,6 @@ static void si_late_optimize_16bit_samplers(struct si_screen *sscreen, nir_shade
    }
 }
 
-static bool
-lower_intrinsic_filter(const nir_instr *instr, const void *dummy)
-{
-   return instr->type == nir_instr_type_intrinsic;
-}
-
-static nir_def *
-lower_intrinsic_instr(nir_builder *b, nir_instr *instr, void *dummy)
-{
-   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
-
-   switch (intrin->intrinsic) {
-   case nir_intrinsic_is_sparse_texels_resident:
-      /* code==0 means sparse texels are resident */
-      return nir_ieq_imm(b, intrin->src[0].ssa, 0);
-   case nir_intrinsic_sparse_residency_code_and:
-      return nir_ior(b, intrin->src[0].ssa, intrin->src[1].ssa);
-   default:
-      return NULL;
-   }
-}
-
-static bool si_lower_intrinsics(nir_shader *nir)
-{
-   return nir_shader_lower_instructions(nir,
-                                        lower_intrinsic_filter,
-                                        lower_intrinsic_instr,
-                                        NULL);
-}
-
 void si_lower_mediump_io(nir_shader *nir)
 {
    NIR_PASS_V(nir, nir_lower_mediump_io,
@@ -284,6 +254,9 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
       .lower_tg4_offsets = true,
       .lower_to_fragment_fetch_amd = sscreen->info.gfx_level < GFX11,
       .lower_1d = sscreen->info.gfx_level == GFX9,
+
+      /* code==0 means sparse texels are resident */
+      .sparse_bit = NIR_SPARSE_BIT_ALL | NIR_SPARSE_BIT_INVERTED,
    };
    NIR_PASS_V(nir, nir_lower_tex, &lower_tex_options);
 
@@ -293,8 +266,6 @@ static void si_lower_nir(struct si_screen *sscreen, struct nir_shader *nir)
                                          !(sscreen->debug_flags & DBG(NO_FMASK)),
    };
    NIR_PASS_V(nir, nir_lower_image, &lower_image_options);
-
-   NIR_PASS_V(nir, si_lower_intrinsics);
 
    NIR_PASS_V(nir, ac_nir_lower_sin_cos);
 

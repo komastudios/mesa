@@ -5351,6 +5351,22 @@ enum ENUM_PACKED nir_lower_tex_packing {
    nir_lower_tex_packing_8,
 };
 
+enum nir_sparse_bit {
+   /* Residency given by zero/nonzero */
+   NIR_SPARSE_BIT_ALL = 0,
+
+   /* Residency given in bit 0 */
+   NIR_SPARSE_BIT_ZERO = 1,
+
+   /* Residency given in bit SubgroupInvocation */
+   NIR_SPARSE_BIT_SUBGROUP_INVOCATION = 2,
+
+   NIR_SPARSE_BIT_MASK = BITFIELD_MASK(2),
+
+   /* Bit flag indicating that 0 means resident and 1 means non-resident */
+   NIR_SPARSE_BIT_INVERTED = BITFIELD_BIT(2),
+};
+
 /***/
 typedef struct nir_lower_tex_options {
    /**
@@ -5579,6 +5595,11 @@ typedef struct nir_lower_tex_options {
     * support indirect indexing of textures (samplers) but not offsetting it.
     */
    bool lower_index_to_offset;
+
+   /* Description of the hardware sparse residency code. Sparse residency
+    * intrinsics are unconditionally lowered.
+    */
+   enum nir_sparse_bit sparse_bit;
 
    /**
     * Payload data to be sent to callback / filter functions.

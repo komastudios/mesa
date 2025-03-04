@@ -16,7 +16,6 @@ liblvp_files = files(
     'nir/lvp_nir_lower_input_attachments.c',
     'nir/lvp_nir_lower_pipeline_layout.c',
     'nir/lvp_nir_lower_ray_queries.c',
-    'nir/lvp_nir_lower_sparse_residency.c',
     'nir/lvp_nir_opt_robustness.c',
     'nir/lvp_nir_ray_tracing.c',
     'lvp_acceleration_structure.c',

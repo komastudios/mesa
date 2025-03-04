@@ -667,20 +667,6 @@ lower_images(nir_builder *b, nir_intrinsic_instr *intr, UNUSED void *data)
       nir_def_rewrite_uses(&intr->def, image_texel_address(b, intr, false));
       return true;
 
-   case nir_intrinsic_is_sparse_texels_resident:
-      /* Residency information is in bit 0, so we need to mask. Unclear what's
-       * in the upper bits. For now, let's match the blob.
-       */
-      nir_def_replace(
-         &intr->def,
-         nir_ieq_imm(b, nir_iand_imm(b, intr->src[0].ssa, 1), AGX_RESIDENT));
-      return true;
-
-   case nir_intrinsic_sparse_residency_code_and:
-      nir_def_replace(&intr->def,
-                      nir_iand(b, intr->src[0].ssa, intr->src[1].ssa));
-      return true;
-
    case nir_intrinsic_image_size:
    case nir_intrinsic_image_texel_address:
       unreachable("should've been lowered");
@@ -780,6 +766,8 @@ agx_nir_lower_texture_early(nir_shader *s, bool support_lod_bias)
        * TODO: Stop using this lowering
        */
       .lower_txd_cube_map = true,
+
+      .sparse_bit = NIR_SPARSE_BIT_ZERO | NIR_SPARSE_BIT_INVERTED,
    };
 
    NIR_PASS(progress, s, nir_lower_tex, &lower_tex_options);

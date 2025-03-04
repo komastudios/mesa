@@ -3672,18 +3672,6 @@ lower_sparse_instr(nir_builder *b, nir_instr *instr, void *data)
          return true;
       }
 
-      case nir_intrinsic_sparse_residency_code_and: {
-         nir_def *res = nir_iand(b, intrin->src[0].ssa, intrin->src[1].ssa);
-         nir_def_rewrite_uses(&intrin->def, res);
-         return true;
-      }
-
-      case nir_intrinsic_is_sparse_texels_resident: {
-         nir_def *res = nir_i2b(b, intrin->src[0].ssa);
-         nir_def_rewrite_uses(&intrin->def, res);
-         return true;
-      }
-
       default:
          return false;
       }
@@ -6385,6 +6373,7 @@ zink_shader_finalize(struct pipe_screen *pscreen, struct nir_shader *nir)
 
    nir_lower_tex_options tex_opts = {
       .lower_invalid_implicit_lod = true,
+      .sparse_bit = NIR_SPARSE_BIT_ALL,
    };
    /*
       Sampled Image must be an object whose type is OpTypeSampledImage.

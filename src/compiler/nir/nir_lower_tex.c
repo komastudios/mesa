@@ -98,6 +98,40 @@ static const float bt2020_full_range_csc_offsets[3] = {
 };
 
 static bool
+lower_sparse(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_is_sparse_texels_resident)
+      return false;
+
+   enum nir_sparse_bit *mode_ = data;
+   enum nir_sparse_bit bit = (*mode_) & NIR_SPARSE_BIT_MASK;
+   bool inverted = (*mode_) & NIR_SPARSE_BIT_INVERTED;
+
+   b->cursor = nir_before_instr(&intr->instr);
+   nir_def *code = intr->src[0].ssa;
+
+   if (bit != NIR_SPARSE_BIT_ALL) {
+      nir_def *mask = nir_imm_int(b, 1);
+
+      if (bit == NIR_SPARSE_BIT_SUBGROUP_INVOCATION) {
+         mask = nir_ishl(b, mask, nir_load_subgroup_invocation(b));
+      }
+
+      code = nir_iand(b, code, mask);
+   }
+
+   nir_def *repl = NULL;
+   if (inverted) {
+      repl = nir_ieq_imm(b, code, 0);
+   } else {
+      repl = nir_ine_imm(b, code, 0);
+   }
+
+   nir_def_replace(&intr->def, repl);
+   return true;
+}
+
+static bool
 project_src(nir_builder *b, nir_tex_instr *tex)
 {
    nir_def *proj = nir_steal_tex_src(tex, nir_tex_src_projector);
@@ -1247,7 +1281,7 @@ sampler_index_lt(nir_tex_instr *tex, unsigned max)
 }
 
 static bool
-lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex)
+lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex, bool residency_inverted)
 {
    assert(tex->op == nir_texop_tg4);
    assert(nir_tex_instr_has_explicit_tg4_offsets(tex));
@@ -1291,10 +1325,12 @@ lower_tg4_offsets(nir_builder *b, nir_tex_instr *tex)
       dest[i] = nir_get_scalar(&tex_copy->def, 3);
       if (tex->is_sparse) {
          nir_def *code = nir_channel(b, &tex_copy->def, 4);
-         if (residency)
-            residency = nir_sparse_residency_code_and(b, residency, code);
-         else
+         if (residency) {
+            nir_op op = residency_inverted ? nir_op_ior : nir_op_iand;
+            residency = nir_build_alu2(b, op, residency, code);
+         } else {
             residency = code;
+         }
       }
    }
    dest[4] = nir_get_scalar(residency, 0);
@@ -1753,7 +1789,9 @@ nir_lower_tex_block(nir_block *block, nir_builder *b,
       if (tex->op == nir_texop_tg4 &&
           nir_tex_instr_has_explicit_tg4_offsets(tex) &&
           options->lower_tg4_offsets) {
-         progress |= lower_tg4_offsets(b, tex);
+
+         bool sparse_inverted = options->sparse_bit & NIR_SPARSE_BIT_INVERTED;
+         progress |= lower_tg4_offsets(b, tex, sparse_inverted);
          continue;
       }
 
@@ -1814,6 +1852,10 @@ nir_lower_tex(nir_shader *shader, const nir_lower_tex_options *options)
    nir_foreach_function_impl(impl, shader) {
       progress |= nir_lower_tex_impl(impl, options, shader->options);
    }
+
+   enum nir_sparse_bit sparse = options->sparse_bit;
+   progress |= nir_shader_intrinsics_pass(shader, lower_sparse,
+                                          nir_metadata_control_flow, &sparse);
 
    return progress;
 }

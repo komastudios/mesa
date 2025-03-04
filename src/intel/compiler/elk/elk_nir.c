@@ -933,6 +933,9 @@ elk_preprocess_nir(const struct elk_compiler *compiler, nir_shader *nir,
       .lower_tg4_offsets = true,
       .lower_txs_lod = true, /* Wa_14012320009 */
       .lower_invalid_implicit_lod = true,
+
+      /* The data reported by the sampler is a single bit per lane */
+      .sparse_bit = NIR_SPARSE_BIT_SUBGROUP_INVOCATION,
    };
 
    OPT(nir_lower_tex, &tex_options);
@@ -1576,6 +1579,7 @@ elk_nir_apply_sampler_key(nir_shader *nir,
       .lower_txd_clamp_if_sampler_index_not_lt_16 = true,
       .lower_invalid_implicit_lod = true,
       .lower_index_to_offset = true,
+      .sparse_bit = NIR_SPARSE_BIT_SUBGROUP_INVOCATION,
    };
 
    /* Iron Lake and prior require lowering of all rectangle textures */
