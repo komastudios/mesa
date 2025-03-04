@@ -103,7 +103,7 @@ lp_fence_issued(const struct lp_fence *fence)
    return fence->issued;
 }
 
-#ifdef HAVE_LIBDRM
+#ifdef DETECT_OS_LINUX
 void
 llvmpipe_init_screen_fence_funcs(struct pipe_screen *pscreen);
 

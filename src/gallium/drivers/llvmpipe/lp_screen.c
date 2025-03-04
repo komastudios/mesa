@@ -215,8 +215,8 @@ llvmpipe_init_screen_caps(struct pipe_screen *screen)
    caps->dmabuf = 0;
 #endif
 
-#if defined(HAVE_LIBDRM) && defined(HAVE_LINUX_UDMABUF_H)
-   caps->native_fence_fd = lscreen->dummy_sync_fd != -1;
+#ifdef DETECT_OS_LINUX
+   caps->native_fence_fd = true;
 #endif
    caps->npot_textures = true;
    caps->mixed_framebuffer_sizes = true;
@@ -985,6 +985,8 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
 
 #if defined(HAVE_LIBDRM) && defined(HAVE_LINUX_UDMABUF_H)
    screen->udmabuf_fd = open("/dev/udmabuf", O_RDWR);
+#endif
+#if DETECT_OS_LINUX
    llvmpipe_init_screen_fence_funcs(&screen->base);
 #endif
 
