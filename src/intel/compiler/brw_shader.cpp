@@ -36,6 +36,7 @@
 #include "compiler/glsl_types.h"
 #include "compiler/nir/nir_builder.h"
 #include "util/u_math.h"
+#include <string.h>
 
 static bool
 brw_is_valid_output(const brw_shader &s, int varying)
@@ -438,7 +439,8 @@ brw_shader::init()
    this->failed = false;
    this->fail_msg = NULL;
 
-   this->payload_ = NULL;
+   memset(&this->payload_, 0, sizeof(this->payload_));
+
    this->source_depth_to_render_target = false;
    this->first_non_payload_grf = 0;
    this->num_payload_regs = 0;
@@ -461,11 +463,6 @@ brw_shader::init()
 
    this->gs.control_data_bits_per_vertex = 0;
    this->gs.control_data_header_size_bits = 0;
-}
-
-brw_shader::~brw_shader()
-{
-   delete this->payload_;
 }
 
 void

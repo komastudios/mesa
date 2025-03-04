@@ -88,7 +88,7 @@ run_gs(brw_shader &s)
 {
    assert(s.stage == MESA_SHADER_GEOMETRY);
 
-   s.payload_ = new brw_gs_thread_payload(s);
+   brw_setup_gs_payload(s);
 
    const brw_builder bld = brw_builder(&s).at_end();
 

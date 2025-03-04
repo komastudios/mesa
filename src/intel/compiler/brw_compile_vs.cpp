@@ -200,7 +200,7 @@ run_vs(brw_shader &s)
 {
    assert(s.stage == MESA_SHADER_VERTEX);
 
-   s.payload_ = new brw_vs_thread_payload(s);
+   brw_setup_vs_payload(s);
 
    brw_from_nir(&s);
 

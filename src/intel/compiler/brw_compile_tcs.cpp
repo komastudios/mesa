@@ -136,7 +136,7 @@ run_tcs(brw_shader &s)
    assert(vue_prog_data->dispatch_mode == INTEL_DISPATCH_MODE_TCS_SINGLE_PATCH ||
           vue_prog_data->dispatch_mode == INTEL_DISPATCH_MODE_TCS_MULTI_PATCH);
 
-   s.payload_ = new brw_tcs_thread_payload(s);
+   brw_setup_tcs_payload(s);
 
    /* Initialize gl_InvocationID */
    brw_set_tcs_invocation_id(s);

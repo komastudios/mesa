@@ -24,32 +24,38 @@
 #include "brw_shader.h"
 #include "brw_builder.h"
 
-brw_vs_thread_payload::brw_vs_thread_payload(brw_shader &v)
+void
+brw_setup_vs_payload(brw_shader &v)
 {
+   brw_vs_thread_payload &payload = v.vs_payload();
+
    unsigned r = 0;
 
    /* R0: Thread header. */
    r += reg_unit(v.devinfo);
 
    /* R1: URB handles. */
-   urb_handles = brw_ud8_grf(r, 0);
+   payload.urb_handles = brw_ud8_grf(r, 0);
    r += reg_unit(v.devinfo);
 
    v.num_payload_regs = r;
 }
 
-brw_tcs_thread_payload::brw_tcs_thread_payload(brw_shader &v)
+void
+brw_setup_tcs_payload(brw_shader &v)
 {
+   brw_tcs_thread_payload &payload = v.tcs_payload();
+
    struct brw_vue_prog_data *vue_prog_data = brw_vue_prog_data(v.prog_data);
    struct brw_tcs_prog_data *tcs_prog_data = brw_tcs_prog_data(v.prog_data);
    struct brw_tcs_prog_key *tcs_key = (struct brw_tcs_prog_key *) v.key;
 
    if (vue_prog_data->dispatch_mode == INTEL_DISPATCH_MODE_TCS_SINGLE_PATCH) {
-      patch_urb_output = brw_ud1_grf(0, 0);
-      primitive_id = brw_vec1_grf(0, 1);
+      payload.patch_urb_output = brw_ud1_grf(0, 0);
+      payload.primitive_id = brw_vec1_grf(0, 1);
 
       /* r1-r4 contain the ICP handles. */
-      icp_handle_start = brw_ud8_grf(1, 0);
+      payload.icp_handle_start = brw_ud8_grf(1, 0);
 
       v.num_payload_regs = 5;
    } else {
@@ -60,48 +66,52 @@ brw_tcs_thread_payload::brw_tcs_thread_payload(brw_shader &v)
 
       r += reg_unit(v.devinfo);
 
-      patch_urb_output = brw_ud8_grf(r, 0);
+      payload.patch_urb_output = brw_ud8_grf(r, 0);
       r += reg_unit(v.devinfo);
 
       if (tcs_prog_data->include_primitive_id) {
-         primitive_id = brw_vec8_grf(r, 0);
+         payload.primitive_id = brw_vec8_grf(r, 0);
          r += reg_unit(v.devinfo);
-      } else {
-         primitive_id = {};
       }
 
       /* ICP handles occupy the next 1-32 registers. */
-      icp_handle_start = brw_ud8_grf(r, 0);
+      payload.icp_handle_start = brw_ud8_grf(r, 0);
       r += brw_tcs_prog_key_input_vertices(tcs_key) * reg_unit(v.devinfo);
 
       v.num_payload_regs = r;
    }
 }
 
-brw_tes_thread_payload::brw_tes_thread_payload(brw_shader &v)
+void
+brw_setup_tes_payload(brw_shader &v)
 {
+   brw_tes_thread_payload &payload = v.tes_payload();
+
    unsigned r = 0;
 
    /* R0: Thread Header. */
-   patch_urb_input = retype(brw_vec1_grf(0, 0), BRW_TYPE_UD);
-   primitive_id = brw_vec1_grf(0, 1);
+   payload.patch_urb_input = retype(brw_vec1_grf(0, 0), BRW_TYPE_UD);
+   payload.primitive_id = brw_vec1_grf(0, 1);
    r += reg_unit(v.devinfo);
 
    /* R1-3: gl_TessCoord.xyz. */
    for (unsigned i = 0; i < 3; i++) {
-      coords[i] = brw_vec8_grf(r, 0);
+      payload.coords[i] = brw_vec8_grf(r, 0);
       r += reg_unit(v.devinfo);
    }
 
    /* R4: URB output handles. */
-   urb_output = brw_ud8_grf(r, 0);
+   payload.urb_output = brw_ud8_grf(r, 0);
    r += reg_unit(v.devinfo);
 
    v.num_payload_regs = r;
 }
 
-brw_gs_thread_payload::brw_gs_thread_payload(brw_shader &v)
+void
+brw_setup_gs_payload(brw_shader &v)
 {
+   brw_gs_thread_payload &payload = v.gs_payload();
+
    struct brw_vue_prog_data *vue_prog_data = brw_vue_prog_data(v.prog_data);
    struct brw_gs_prog_data *gs_prog_data = brw_gs_prog_data(v.prog_data);
    const brw_builder bld = brw_builder(&v).at_end();
@@ -110,21 +120,19 @@ brw_gs_thread_payload::brw_gs_thread_payload(brw_shader &v)
    unsigned r = reg_unit(v.devinfo);
 
    /* R1: output URB handles. */
-   urb_handles = bld.vgrf(BRW_TYPE_UD);
-   bld.AND(urb_handles, brw_ud8_grf(r, 0),
+   payload.urb_handles = bld.vgrf(BRW_TYPE_UD);
+   bld.AND(payload.urb_handles, brw_ud8_grf(r, 0),
          v.devinfo->ver >= 20 ? brw_imm_ud(0xFFFFFF) : brw_imm_ud(0xFFFF));
 
    /* R1: Instance ID stored in bits 31:27 */
-   instance_id = bld.vgrf(BRW_TYPE_UD);
-   bld.SHR(instance_id, brw_ud8_grf(r, 0), brw_imm_ud(27u));
+   payload.instance_id = bld.vgrf(BRW_TYPE_UD);
+   bld.SHR(payload.instance_id, brw_ud8_grf(r, 0), brw_imm_ud(27u));
 
    r += reg_unit(v.devinfo);
 
    if (gs_prog_data->include_primitive_id) {
-      primitive_id = brw_ud8_grf(r, 0);
+      payload.primitive_id = brw_ud8_grf(r, 0);
       r += reg_unit(v.devinfo);
-   } else {
-      primitive_id = {};
    }
 
    /* Always enable VUE handles so we can safely use pull model if needed.
@@ -136,7 +144,7 @@ brw_gs_thread_payload::brw_gs_thread_payload(brw_shader &v)
    gs_prog_data->base.include_vue_handles = true;
 
    /* R3..RN: ICP Handles for each incoming vertex (when using pull model) */
-   icp_handle_start = brw_ud8_grf(r, 0);
+   payload.icp_handle_start = brw_ud8_grf(r, 0);
    r += v.nir->info.gs.vertices_in * reg_unit(v.devinfo);
 
    v.num_payload_regs = r;
@@ -336,31 +344,22 @@ setup_fs_payload_gfx9(brw_fs_thread_payload &payload,
    }
 }
 
-brw_fs_thread_payload::brw_fs_thread_payload(brw_shader &v,
-                                     bool &source_depth_to_render_target)
-  : subspan_coord_reg(),
-    source_depth_reg(),
-    source_w_reg(),
-    aa_dest_stencil_reg(),
-    sample_pos_reg(),
-    sample_mask_in_reg(),
-    barycentric_coord_reg(),
-    depth_w_coef_reg(),
-    pc_bary_coef_reg(),
-    npc_bary_coef_reg(),
-    sample_offsets_reg()
+void
+brw_setup_fs_payload(brw_shader &v)
 {
+   brw_fs_thread_payload &payload = v.fs_payload();
+
    if (v.devinfo->ver >= 20)
-      setup_fs_payload_gfx20(*this, v, source_depth_to_render_target);
+      setup_fs_payload_gfx20(payload, v, v.source_depth_to_render_target);
    else
-      setup_fs_payload_gfx9(*this, v, source_depth_to_render_target);
+      setup_fs_payload_gfx9(payload, v, v.source_depth_to_render_target);
 }
 
-brw_cs_thread_payload::brw_cs_thread_payload(brw_shader &v)
-   : local_invocation_id(),
-     inline_parameter(),
-     subgroup_id_()
+void
+brw_setup_cs_payload(brw_shader &v)
 {
+   brw_cs_thread_payload &payload = v.cs_payload();
+
    struct brw_cs_prog_data *prog_data = brw_cs_prog_data(v.prog_data);
 
    unsigned r = reg_unit(v.devinfo);
@@ -369,16 +368,16 @@ brw_cs_thread_payload::brw_cs_thread_payload(brw_shader &v)
 
    /* See nir_setup_uniforms for subgroup_id in earlier versions. */
    if (v.devinfo->verx10 >= 125) {
-      subgroup_id_ = brw_ud1_grf(0, 2);
+      payload.subgroup_id_ = brw_ud1_grf(0, 2);
 
       for (int i = 0; i < 3; i++) {
          if (prog_data->generate_local_id & (1 << i)) {
-            local_invocation_id[i] = brw_uw8_grf(r, 0);
+            payload.local_invocation_id[i] = brw_uw8_grf(r, 0);
             r += reg_unit(v.devinfo);
             if (v.devinfo->ver < 20 && v.dispatch_width == 32)
                r += reg_unit(v.devinfo);
          } else {
-            local_invocation_id[i] = brw_imm_uw(0);
+            payload.local_invocation_id[i] = brw_imm_uw(0);
          }
       }
 
@@ -389,7 +388,7 @@ brw_cs_thread_payload::brw_cs_thread_payload(brw_shader &v)
       if (v.stage == MESA_SHADER_COMPUTE &&
           (prog_data->uses_inline_data ||
            prog_data->uses_inline_push_addr)) {
-         inline_parameter = brw_ud1_grf(r, 0);
+         payload.inline_parameter = brw_ud1_grf(r, 0);
          r += reg_unit(v.devinfo);
       }
    } else {
@@ -418,8 +417,8 @@ brw_cs_thread_payload::load_subgroup_id(const brw_builder &bld,
    }
 }
 
-brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
-   : inline_parameter()
+void
+brw_setup_task_mesh_payload(brw_shader &v)
 {
    /* Task and Mesh Shader Payloads (SIMD8 and SIMD16)
     *
@@ -440,6 +439,8 @@ brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
     * the address to descriptors.
     */
 
+   brw_task_mesh_thread_payload &payload = v.task_mesh_payload();
+
    {
       struct brw_cs_prog_data *prog_data = brw_cs_prog_data(v.prog_data);
       prog_data->uses_inline_push_addr = v.key->uses_inline_push_addr;
@@ -449,17 +450,17 @@ brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
    const brw_builder bld = brw_builder(&v).at_end();
 
    unsigned r = 0;
-   extended_parameter_0 = retype(brw_vec1_grf(0, 3), BRW_TYPE_UD);
+   payload.extended_parameter_0 = retype(brw_vec1_grf(0, 3), BRW_TYPE_UD);
 
    if (v.devinfo->ver >= 20) {
-      urb_output = brw_ud1_grf(1, 0);
+      payload.urb_output = brw_ud1_grf(1, 0);
    } else {
-      urb_output = bld.vgrf(BRW_TYPE_UD);
+      payload.urb_output = bld.vgrf(BRW_TYPE_UD);
       /* In both mesh and task shader payload, lower 16 bits of g0.6 is
        * an offset within Slice's Local URB, which says where shader is
        * supposed to output its data.
        */
-      bld.AND(urb_output, brw_ud1_grf(0, 6), brw_imm_ud(0xFFFF));
+      bld.AND(payload.urb_output, brw_ud1_grf(0, 6), brw_imm_ud(0xFFFF));
    }
 
    if (v.stage == MESA_SHADER_MESH) {
@@ -469,28 +470,29 @@ brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
        * is spawned on slice other than the one where task shader was run.
        * Bit 24 says that Slice ID is present and bits 16:23 is the Slice ID.
        */
-      task_urb_input = brw_ud1_grf(0, 7);
-   } else {
-      task_urb_input = {};
+      payload.task_urb_input = brw_ud1_grf(0, 7);
    }
    r += reg_unit(v.devinfo);
 
-   local_index = brw_uw8_grf(r, 0);
+   payload.local_index = brw_uw8_grf(r, 0);
    r += reg_unit(v.devinfo);
    if (v.devinfo->ver < 20 && v.dispatch_width == 32)
       r += reg_unit(v.devinfo);
 
    struct brw_cs_prog_data *prog_data = brw_cs_prog_data(v.prog_data);
    if (prog_data->uses_inline_data || prog_data->uses_inline_push_addr) {
-      inline_parameter = brw_ud1_grf(r, 0);
+      payload.inline_parameter = brw_ud1_grf(r, 0);
       r += reg_unit(v.devinfo);
    }
 
    v.num_payload_regs = r;
 }
 
-brw_bs_thread_payload::brw_bs_thread_payload(brw_shader &v)
+void
+brw_setup_bs_payload(brw_shader &v)
 {
+   brw_bs_thread_payload &payload = v.bs_payload();
+
    struct brw_bs_prog_data *prog_data = brw_bs_prog_data(v.prog_data);
 
    unsigned r = 0;
@@ -503,9 +505,9 @@ brw_bs_thread_payload::brw_bs_thread_payload(brw_shader &v)
 
    /* R2: Inline Parameter.  Used for argument addresses. */
    prog_data->uses_inline_push_addr = v.key->uses_inline_push_addr;
-   inline_parameter = brw_ud1_grf(r, 0);
-   global_arg_ptr = brw_ud1_grf(r, 0);
-   local_arg_ptr = brw_ud1_grf(r, 2);
+   payload.inline_parameter = brw_ud1_grf(r, 0);
+   payload.global_arg_ptr = brw_ud1_grf(r, 0);
+   payload.local_arg_ptr = brw_ud1_grf(r, 2);
    r += reg_unit(v.devinfo);
 
    v.num_payload_regs = r;
