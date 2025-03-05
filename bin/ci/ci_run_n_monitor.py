@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from itertools import chain
 from subprocess import check_output, CalledProcessError
-from typing import Dict, TYPE_CHECKING, Iterable, Literal, Optional, Tuple
+from typing import Callable, Dict, TYPE_CHECKING, Iterable, Literal, Optional, Tuple, cast
 
 import gitlab
 import gitlab.v4.objects
@@ -38,12 +38,14 @@ from gitlab_common import (
     wait_for_pipeline,
 )
 from gitlab_gql import GitlabGQL, create_job_needs_dag, filter_dag, print_dag
+from yaspin import yaspin
 
 if TYPE_CHECKING:
     from gitlab_gql import Dag
 
 REFRESH_WAIT_LOG = 10
 REFRESH_WAIT_JOBS = 6
+MAX_ENABLE_JOB_ATTEMPTS = 3
 
 URL_START = "\033]8;;"
 URL_END = "\033]8;;\a"
@@ -73,7 +75,7 @@ def print_job_status(
     if job.status in {"canceled", "canceling"}:
         return
 
-    if new_status and job.status == "created":
+    if new_status and job.status in {"created", "skipped"}:
         return
 
     job_name_field_pad = len(job.name) if job_name_field_pad < 1 else job_name_field_pad
@@ -99,23 +101,101 @@ def job_duration(job: gitlab.v4.objects.ProjectPipelineJob) -> float:
     if job.duration:
         return job.duration
     elif job.started_at:
-        return time.perf_counter() - time.mktime(job.started_at.timetuple())
+        # Convert both times to UTC timestamps for consistent comparison
+        current_time = time.time()
+        start_time = job.started_at.timestamp()
+        return current_time - start_time
     return 0.0
 
 
-def pretty_wait(sec: int) -> None:
-    """shows progressbar in dots"""
-    for val in range(sec, 0, -1):
-        print(f"⏲  {val} seconds", end="\r")  # U+23F2 Timer clock
-        time.sleep(1)
+def pretty_wait(sec: int, message: str = "", color: str = "yellow", **yaspin_kwargs) -> None:
+    """
+    Wait for a given number of seconds, with a nice spinner.
+
+    :param sec: Number of seconds to wait
+    :param message: Message to display while waiting
+    :param color: Color of the spinner
+    :param yaspin_kwargs: Additional arguments to pass to yaspin
+    """
+    with yaspin(text=message, color=color, **yaspin_kwargs).simpleDotsScrolling:
+        time.sleep(sec)
+
+
+def pretty_pipeline_list(
+    pipeline: gitlab.v4.objects.ProjectPipeline,
+    message: str = "Loading pipeline jobs...",
+    *args,
+    **kwargs,
+) -> list[gitlab.v4.objects.ProjectPipelineJob]:
+    with yaspin(text=message, color="cyan", timer=True).bouncingBar as spinner:
+        jobs = []
+        for job in pipeline.jobs.list(*args, **kwargs):
+            job = cast(gitlab.v4.objects.ProjectPipelineJob, job)
+            jobs.append(job)
+        spinner.cyan.ok(f"Found {len(jobs)} jobs.")
+    return jobs
+
+
+def run_target_job(
+    job: gitlab.v4.objects.ProjectPipelineJob,
+    enable_job_fn: Callable,
+    stress: int,
+    stress_status_counter: dict,
+    execution_times: dict,
+    target_statuses: dict,
+    name_field_pad: int,
+) -> None:
+    if stress and job.status in COMPLETED_STATUSES:
+        if (
+            stress < 0
+            or sum(stress_status_counter[job.name].values()) < stress
+        ):
+            stress_status_counter[job.name][job.status] += 1
+            execution_times[job.name][job.id] = (job_duration(job), job.status, job.web_url)
+            enable_job_fn(job=job, action_type="retry")
+            # Wait for the next loop to get the updated job object
+            return
+    else:
+        execution_times[job.name][job.id] = (job_duration(job), job.status, job.web_url)
+        enable_job_fn(job=job, action_type="target")
+
+    print_job_status(job, job.status not in target_statuses[job.name], name_field_pad)
+    target_statuses[job.name] = job.status
+
+
+def is_target_job(
+    target_jobs_regex: re.Pattern,
+    include_stage_regex: re.Pattern,
+    exclude_stage_regex: re.Pattern,
+    job: gitlab.v4.objects.ProjectPipelineJob,
+) -> bool:
+    return target_jobs_regex.fullmatch(job.name) and \
+        include_stage_regex.fullmatch(job.stage) and \
+        not exclude_stage_regex.fullmatch(job.stage)
+
+
+def collect_stress_status_counter(
+    pipeline: gitlab.v4.objects.ProjectPipeline,
+    is_target_job: Callable[[gitlab.v4.objects.ProjectPipelineJob], bool],
+    stress_status_counter: dict[str, dict[str, int]],
+    execution_times: dict[str, dict[int, tuple[float, str, str]]],
+) -> None:
+    # When stress test, it is necessary to collect this information before start.
+    for job in pretty_pipeline_list(
+        pipeline,
+        all=True,
+        include_retried=True,
+        message="[Stress counter] Looking for retried jobs from pipeline...",
+    ):
+        if is_target_job(job):
+            stress_status_counter[job.name][job.status] += 1
+            execution_times[job.name][job.id] = (job_duration(job), job.status, job.web_url)
 
 
 def monitor_pipeline(
     project: gitlab.v4.objects.Project,
     pipeline: gitlab.v4.objects.ProjectPipeline,
-    target_jobs_regex: re.Pattern,
-    include_stage_regex: re.Pattern,
-    exclude_stage_regex: re.Pattern,
+    is_target_job: Callable[[gitlab.v4.objects.ProjectPipelineJob], bool],
     dependencies: set[str],
     stress: int,
 ) -> tuple[Optional[int], Optional[int], Dict[str, Dict[int, Tuple[float, str, str]]]]:
@@ -123,7 +203,7 @@ def monitor_pipeline(
     statuses: dict[str, str] = defaultdict(str)
     target_statuses: dict[str, str] = defaultdict(str)
     stress_status_counter: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    execution_times = defaultdict(lambda: defaultdict(tuple))
+    execution_times: dict[str, dict[int, tuple[float, str, str]]] = defaultdict(lambda: defaultdict(tuple))
     target_id: int = -1
     name_field_pad: int = len(max(dependencies, key=len))+2
     # In a running pipeline, we can skip following job traces that are in these statuses.
@@ -131,53 +211,43 @@ def monitor_pipeline(
 
     # Pre-populate the stress status counter for already completed target jobs.
     if stress:
-        # When stress test, it is necessary to collect this information before start.
-        for job in pipeline.jobs.list(all=True, include_retried=True):
-            if target_jobs_regex.fullmatch(job.name) and \
-               include_stage_regex.fullmatch(job.stage) and \
-               not exclude_stage_regex.fullmatch(job.stage) and \
-               job.status in COMPLETED_STATUSES:
-                stress_status_counter[job.name][job.status] += 1
-                execution_times[job.name][job.id] = (job_duration(job), job.status, job.web_url)
-
+        collect_stress_status_counter(
+            pipeline, is_target_job, stress_status_counter, execution_times
+        )
     # jobs_waiting is a list of job names that are waiting for status update.
     # It occurs when a job that we want to run depends on another job that is not yet finished.
     jobs_waiting = []
+    # Dictionary to track the number of attempts made for each job
+    enable_attempts: dict[int, int] = {}
     # FIXME: This function has too many parameters, consider refactoring.
     enable_job_fn = partial(
         enable_job,
         project=project,
-        pipeline=pipeline,
+        enable_attempts=enable_attempts,
         job_name_field_pad=name_field_pad,
         jobs_waiting=jobs_waiting,
     )
     while True:
         deps_failed = []
-        to_cancel = []
+        to_cancel = set()
         jobs_waiting.clear()
-        for job in sorted(pipeline.jobs.list(all=True), key=lambda j: j.name):
-            if target_jobs_regex.fullmatch(job.name) and \
-               include_stage_regex.fullmatch(job.stage) and \
-               not exclude_stage_regex.fullmatch(job.stage):
+        for job in sorted(
+            pretty_pipeline_list(pipeline, all=True, message="Refreshing pipeline status..."),
+            key=lambda j: j.name,
+        ):
+            job = cast(gitlab.v4.objects.ProjectPipelineJob, job)
+            if is_target_job(job):
+                run_target_job(
+                    job,
+                    enable_job_fn,
+                    stress,
+                    stress_status_counter,
+                    execution_times,
+                    target_statuses,
+                    name_field_pad,
+                )
                 target_id = job.id
-                target_status = job.status
-
-                if stress and target_status in COMPLETED_STATUSES:
-                    if (
-                        stress < 0
-                        or sum(stress_status_counter[job.name].values()) < stress
-                    ):
-                        stress_status_counter[job.name][target_status] += 1
-                        execution_times[job.name][job.id] = (job_duration(job), target_status, job.web_url)
-                        job = enable_job_fn(job=job, action_type="retry")
-                else:
-                    execution_times[job.name][job.id] = (job_duration(job), target_status, job.web_url)
-                    job = enable_job_fn(job=job, action_type="target")
-
-                print_job_status(job, target_status not in target_statuses[job.name], name_field_pad)
-                target_statuses[job.name] = target_status
                 continue
-
             # all other non-target jobs
             if job.status != statuses[job.name]:
                 print_job_status(job, True, name_field_pad)
@@ -185,11 +255,15 @@ def monitor_pipeline(
 
             # run dependencies and cancel the rest
             if job.name in dependencies:
-                job = enable_job_fn(job=job, action_type="dep")
+                if not enable_job_fn(job=job, action_type="dep"):
+                    # Wait for the next loop to get the updated job object
+                    continue
                 if job.status == "failed":
                     deps_failed.append(job.name)
-            else:
-                to_cancel.append(job)
+            elif job.status in RUNNING_STATUSES:
+                to_cancel.add(job)
+            elif job.status == "skipped":
+                to_cancel.discard(job)
 
         cancel_jobs(project, to_cancel)
 
@@ -206,16 +280,16 @@ def monitor_pipeline(
                     enough = False
 
             if not enough:
-                pretty_wait(REFRESH_WAIT_JOBS)
+                pretty_wait(
+                    REFRESH_WAIT_JOBS,
+                    "[Stress test] Waiting for jobs to complete...",
+                    color="green",
+                )
                 continue
 
         if jobs_waiting:
-            print_once(
-                f"{Fore.YELLOW}Waiting for jobs to update status:",
-                ", ".join(jobs_waiting),
-                Fore.RESET,
-            )
-            pretty_wait(REFRESH_WAIT_JOBS)
+            message = "Waiting for jobs to update status: " + ", ".join(jobs_waiting)
+            pretty_wait(REFRESH_WAIT_JOBS, message)
             continue
 
         if len(target_statuses) == 1 and RUNNING_STATUSES.intersection(
@@ -244,45 +318,64 @@ def monitor_pipeline(
         if skip_follow_statuses.issuperset(target_statuses.values()):
             return None, 0, execution_times
 
-        pretty_wait(REFRESH_WAIT_JOBS)
-
-
-def get_pipeline_job(
-    pipeline: gitlab.v4.objects.ProjectPipeline,
-    job_id: int,
-) -> gitlab.v4.objects.ProjectPipelineJob:
-    pipeline_jobs = pipeline.jobs.list(all=True)
-    return [j for j in pipeline_jobs if j.id == job_id][0]
+        pretty_wait(
+            REFRESH_WAIT_JOBS,
+            "Waiting for target job to become available...",
+        )
 
 
 def enable_job(
     project: gitlab.v4.objects.Project,
-    pipeline: gitlab.v4.objects.ProjectPipeline,
     job: gitlab.v4.objects.ProjectPipelineJob,
+    enable_attempts: dict[int, int],
     action_type: Literal["target", "dep", "retry"],
     job_name_field_pad: int = 0,
     jobs_waiting: list[str] = [],
-) -> gitlab.v4.objects.ProjectPipelineJob:
+) -> bool:
+    """
+    Enable a job to run.
+    :param project: The GitLab project.
+    :param job: The job to enable.
+    :param enable_attempts: A dictionary to track the number of attempts made for each job.
+    :param action_type: The type of action to perform.
+    :return: True if the job was enabled, False otherwise.
+    """
     # We want to run this job, but it is not ready to run yet, so let's try again in the next
     # iteration.
     if job.status == "created":
         jobs_waiting.append(job.name)
-        return job
+        return False
 
     if (
         (job.status in COMPLETED_STATUSES and action_type != "retry")
         or job.status in {"skipped"} | RUNNING_STATUSES
     ):
-        return job
+        return False
+
+    # Get current attempt number
+    attempt_count = enable_attempts.get(job.id, 0)
+    # Check if we've exceeded max attempts to avoid infinite loop
+    if attempt_count >= MAX_ENABLE_JOB_ATTEMPTS:
+        raise RuntimeError(
+            f"Maximum enabling attempts ({MAX_ENABLE_JOB_ATTEMPTS}) reached for job {job.name} "
+            f"({link2print(job.web_url, job.id)}). Giving up."
+        )
+    enable_attempts[job.id] = attempt_count + 1
 
     pjob = project.jobs.get(job.id, lazy=True)
 
     if job.status in {"success", "failed", "canceled", "canceling"}:
-        new_job = pjob.retry()
-        job = get_pipeline_job(pipeline, new_job["id"])
+        try:
+            pjob.retry()
+        except Exception as e:
+            print(f"Error retrying job {job.name}: {e}")
+            return False
     else:
-        pjob.play()
-        job = get_pipeline_job(pipeline, pjob.id)
+        try:
+            pjob.play()
+        except Exception as e:
+            print(f"Error playing job {job.name}: {e}")
+            return False
 
     if action_type == "target":
         jtype = "🞋 target"  # U+1F78B Round target
@@ -294,24 +387,28 @@ def enable_job(
     job_name_field_pad = len(job.name) if job_name_field_pad < 1 else job_name_field_pad
     print(Fore.MAGENTA + f"{jtype} job {job.name:{job_name_field_pad}}manually enabled" + Style.RESET_ALL)
 
-    return job
+    return True
 
 
 def cancel_job(
     project: gitlab.v4.objects.Project,
     job: gitlab.v4.objects.ProjectPipelineJob
-) -> None:
+) -> gitlab.v4.objects.ProjectPipelineJob | None:
     """Cancel GitLab job"""
     if job.status not in RUNNING_STATUSES:
-        return
-    pjob = project.jobs.get(job.id, lazy=True)
-    pjob.cancel()
-    print(f"🗙 {job.name}", end=" ")  # U+1F5D9 Cancellation X
+        return job
+    try:
+        pjob = project.jobs.get(job.id, lazy=True)
+        pjob.cancel()
+    except (gitlab.GitlabCancelError, gitlab.GitlabGetError):
+        # If the job failed to cancel, it will be retried in the monitor_pipeline() next iteration
+        return None
+    return job
 
 
 def cancel_jobs(
     project: gitlab.v4.objects.Project,
-    to_cancel: list
+    to_cancel: set[gitlab.v4.objects.ProjectPipelineJob]
 ) -> None:
     """Cancel unwanted GitLab jobs"""
     if not to_cancel:
@@ -319,10 +416,20 @@ def cancel_jobs(
 
     with ThreadPoolExecutor(max_workers=6) as exe:
         part = partial(cancel_job, project)
-        exe.map(part, to_cancel)
-
-    # The cancelled jobs are printed without a newline
-    print_once()
+        with yaspin(
+            text=f"Cancelling {len(to_cancel)} jobs...",
+            color="yellow",
+            timer=True,
+        ).toggle13 as spinner:
+            maybe_cancelled_jobs = exe.map(part, to_cancel)
+            cancelled_jobs = [job for job in maybe_cancelled_jobs if job]
+            to_cancel -= set(cancelled_jobs)
+            if cancelled_jobs:
+                cancelled_job_names = [job.name for job in cancelled_jobs]
+                spinner.yellow.write(
+                    f"Cancelled {len(cancelled_job_names)} jobs: {', '.join(cancelled_job_names)}"
+                )
+                spinner.ok()
 
 
 def print_log(
@@ -334,16 +441,31 @@ def print_log(
     while True:
         job = project.jobs.get(job_id)
 
+        if job.status in COMPLETED_STATUSES:
+            print(Fore.GREEN + f"Job finished: {job.web_url}" + Style.RESET_ALL)
+            return
+
+        if job.status == "canceled":
+            print(Fore.RED, f"Job canceled: {job.web_url}", Fore.RESET, sep="")
+            return
+
         # GitLab's REST API doesn't offer pagination for logs, so we have to refetch it all
         lines = job.trace().decode().splitlines()
         for line in lines[printed_lines:]:
             print(line)
         printed_lines = len(lines)
 
-        if job.status in COMPLETED_STATUSES:
-            print(Fore.GREEN + f"Job finished: {job.web_url}" + Style.RESET_ALL)
-            return
-        pretty_wait(REFRESH_WAIT_LOG)
+        if job.status == "canceling":
+            # Print warning to stderr to avoid mixing with job log
+            print(
+                Fore.RED,
+                f"Warning: Job {job.name} is being canceled: {job.web_url}",
+                Fore.RESET,
+                file=sys.stderr,
+                sep="",
+            )
+
+        pretty_wait(REFRESH_WAIT_LOG, "Waiting for job trace to be updated...", color="blue")
 
 
 def parse_args() -> argparse.Namespace:
@@ -489,13 +611,17 @@ def find_dependencies(
         SystemExit: If no target jobs are found in the pipeline.
     """
     gql_instance = GitlabGQL(token=token)
-    dag = create_job_needs_dag(
-        gql_instance, {"projectPath": project_path.path_with_namespace, "iid": iid}
-    )
+    with yaspin(
+        text="Loading full configuration YAML...", color="magenta", timer=True
+    ).line as spinner:
+        dag = create_job_needs_dag(
+            gql_instance, {"projectPath": project_path, "iid": iid}
+        )
+        spinner.ok()
 
     target_dep_dag = filter_dag(dag, target_jobs_regex, include_stage_regex, exclude_stage_regex)
     if not target_dep_dag:
-        print(Fore.RED + "The job(s) were not found in the pipeline." + Fore.RESET)
+        print(Fore.RED, "The job(s) were not found in the pipeline.", Fore.RESET, sep="")
         sys.exit(1)
 
     dependency_jobs = set(chain.from_iterable(d["needs"] for d in target_dep_dag.values()))
@@ -538,7 +664,7 @@ def __job_duration_record(dict_item: tuple) -> str:
 
 
 def link2print(url: str, text: str, text_pad: int = 0) -> str:
-    text_pad = len(text) if text_pad < 1 else text_pad
+    text_pad = max(text_pad, len(text)) + len(URL_END)
     return f"{URL_START}{url}\a{text:{text_pad}}{URL_END}"
 
 
@@ -557,10 +683,12 @@ def main() -> None:
         REV: str = args.rev
 
         if args.pipeline_url:
-            pipe, cur_project = get_gitlab_pipeline_from_url(gl, args.pipeline_url)
-            REV = pipe.sha
+            with yaspin(text="Loading pipeline from URL...", color="white", timer=True).line:
+                pipe, cur_project = get_gitlab_pipeline_from_url(gl, args.pipeline_url)
+                REV = pipe.sha
         else:
-            mesa_project = gl.projects.get("mesa/mesa")
+            with yaspin(text="Loading pipeline from project...", color="white", timer=True).line:
+                mesa_project = gl.projects.get("mesa/mesa")
             projects = [mesa_project]
             if args.mr:
                 REV = mesa_project.mergerequests.get(args.mr).sha
@@ -598,6 +726,9 @@ def main() -> None:
                 projects.append(get_gitlab_project(gl, args.project))
             (pipe, cur_project) = wait_for_pipeline(projects, REV)
 
+        assert pipe is not None, "Pipeline not found"
+        assert cur_project is not None, "Project not found"
+
         print(f"Revision: {REV}")
         print(f"Pipeline: {pipe.web_url}")
 
@@ -631,7 +762,7 @@ def main() -> None:
             include_stage_regex=include_stage_regex,
             exclude_stage_regex=exclude_stage_regex,
             iid=pipe.iid,
-            project_path=cur_project
+            project_path=cur_project.path_with_namespace
         )
 
         if args.dry_run:
@@ -640,9 +771,7 @@ def main() -> None:
         target_job_id, ret, exec_t = monitor_pipeline(
             cur_project,
             pipe,
-            target_jobs_regex,
-            include_stage_regex,
-            exclude_stage_regex,
+            partial(is_target_job, target_jobs_regex, include_stage_regex, exclude_stage_regex),
             deps,
             args.stress
         )
