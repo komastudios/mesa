@@ -1793,8 +1793,12 @@ bi_emit_ld_tile(bi_builder *b, nir_intrinsic_instr *instr)
    if (!is_zs && !nir_src_is_const(instr->src[0]))
       pi = bi_lshift_or(b, 32, bi_src_index(&instr->src[0]), pi, bi_imm_u8(8));
 
-   if (!nir_src_is_const(instr->src[1]))
-      pi = bi_lshift_or(b, 32, bi_src_index(&instr->src[1]), pi, bi_imm_u8(0));
+   if (!nir_src_is_const(instr->src[1])) {
+      bi_index sample = bi_lshift_and(b, 32, bi_src_index(&instr->src[1]),
+                                      bi_imm_u32(0x1f), bi_imm_u8(0));
+
+      pi = bi_lshift_or(b, 32, sample, pi, bi_imm_u8(0));
+   }
 
    bi_instr *I = bi_ld_tile_to(b, dest, pi, bi_coverage(b),
                                bi_src_index(&instr->src[2]), regfmt, nr - 1);
