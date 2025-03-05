@@ -113,7 +113,7 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 			 int x1, int y1, int x2, int y2,
 			 float depth, unsigned num_instances,
 			 enum blitter_attrib_type type,
-			 const union blitter_attrib *attrib)
+			 const struct blitter_attrib *attrib)
 {
 	struct r600_common_context *rctx =
 		(struct r600_common_context*)util_blitter_get_pipe(blitter);
@@ -163,11 +163,6 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	vb[19] = 1;
 
 	switch (type) {
-	case UTIL_BLITTER_ATTRIB_COLOR:
-		memcpy(vb+4, attrib->color, sizeof(float)*4);
-		memcpy(vb+12, attrib->color, sizeof(float)*4);
-		memcpy(vb+20, attrib->color, sizeof(float)*4);
-		break;
 	case UTIL_BLITTER_ATTRIB_TEXCOORD_XYZW:
 	case UTIL_BLITTER_ATTRIB_TEXCOORD_XY:
 		vb[6] = vb[14] = vb[22] = attrib->texcoord.z;

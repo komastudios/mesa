@@ -2477,7 +2477,7 @@ static void si_draw_vertex_state(struct pipe_context *ctx,
 static void si_draw_rectangle(struct blitter_context *blitter, void *vertex_elements_cso,
                               blitter_get_vs_func get_vs, int x1, int y1, int x2, int y2,
                               float depth, unsigned num_instances, enum blitter_attrib_type type,
-                              const union blitter_attrib *attrib)
+                              const struct blitter_attrib *attrib)
 {
    struct pipe_context *pipe = util_blitter_get_pipe(blitter);
    struct si_context *sctx = (struct si_context *)pipe;
@@ -2498,10 +2498,6 @@ static void si_draw_rectangle(struct blitter_context *blitter, void *vertex_elem
    sctx->vs_blit_sh_data[2] = fui(depth);
 
    switch (type) {
-   case UTIL_BLITTER_ATTRIB_COLOR:
-      memcpy(&sctx->vs_blit_sh_data[3], attrib->color, sizeof(float) * 4);
-      sctx->vs_blit_sh_data[7] = attribute_ring_address_lo;
-      break;
    case UTIL_BLITTER_ATTRIB_TEXCOORD_XY:
    case UTIL_BLITTER_ATTRIB_TEXCOORD_XYZW:
       memcpy(&sctx->vs_blit_sh_data[3], &attrib->texcoord, sizeof(attrib->texcoord));
