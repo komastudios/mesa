@@ -143,7 +143,7 @@ panvk_lower_sysvals(nir_builder *b, nir_instr *instr, void *data)
          uint32_t target = ~0;
 
          if (depth_idx == index || stencil_idx == index) {
-            target = PANVK_Z_ATTACHMENT;
+            target = PANVK_ZS_ATTACHMENT;
             ctx->shader->fs.zs_attachment_read = true;
          } else {
             for (unsigned i = 0; i < ctx->ial->color_attachment_count; i++) {

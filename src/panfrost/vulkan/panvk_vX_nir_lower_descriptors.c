@@ -897,9 +897,7 @@ lower_input_attachment_load(nir_builder *b, nir_intrinsic_instr *intr,
 
          iosem.location = dest_type == nir_type_float32 ? FRAG_RESULT_DEPTH
                                                         : FRAG_RESULT_STENCIL;
-         target = nir_imm_int(b, iosem.location == FRAG_RESULT_DEPTH
-                                    ? PANVK_Z_ATTACHMENT
-                                    : PANVK_S_ATTACHMENT);
+         target = nir_imm_int(b, 0);
          load_zs = nir_load_converted_output_pan(
             b, intr->def.num_components, intr->def.bit_size, target,
             intr->src[2].ssa, conversion, .dest_type = dest_type,

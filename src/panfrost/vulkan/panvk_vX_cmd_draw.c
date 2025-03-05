@@ -587,7 +587,7 @@ prepare_iam_sysvals(struct panvk_cmd_buffer *cmdbuf, BITSET_WORD *dirty_sysvals)
          ial->depth_att == MESA_VK_ATTACHMENT_NO_INDEX ? 0 : ial->depth_att + 1;
 
       assert(ia_idx < ARRAY_SIZE(iam));
-      iam[ia_idx].target = PANVK_Z_ATTACHMENT;
+      iam[ia_idx].target = PANVK_ZS_ATTACHMENT;
 
 #if PAN_ARCH <= 7
       /* On v7, we need to pass the depth format around. If we use a conversion
@@ -610,7 +610,7 @@ prepare_iam_sysvals(struct panvk_cmd_buffer *cmdbuf, BITSET_WORD *dirty_sysvals)
          ial->stencil_att == MESA_VK_ATTACHMENT_NO_INDEX ? 0 : ial->stencil_att + 1;
 
       assert(ia_idx < ARRAY_SIZE(iam));
-      iam[ia_idx].target = PANVK_S_ATTACHMENT;
+      iam[ia_idx].target = PANVK_ZS_ATTACHMENT;
    }
 
    for (uint32_t i = 0; i < ARRAY_SIZE(iam); i++)

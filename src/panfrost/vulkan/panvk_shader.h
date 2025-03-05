@@ -53,8 +53,7 @@ enum panvk_desc_table_id {
 #endif
 
 #define PANVK_COLOR_ATTACHMENT(x) (x)
-#define PANVK_Z_ATTACHMENT        255
-#define PANVK_S_ATTACHMENT        254
+#define PANVK_ZS_ATTACHMENT       255
 
 struct panvk_input_attachment_info {
    uint32_t target;
