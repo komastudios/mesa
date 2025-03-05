@@ -1409,6 +1409,26 @@ v3d_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info,
                 v3d_flush(pctx);
         }
 
+        if (job->submit.bo_handle_count >= 8192) {
+                perf_debug("Discarding BO with %d handles to free up space\n",
+                           job->submit.bo_handle_count);
+                set_foreach(job->bos, entry) {
+                        struct v3d_bo *bo = (struct v3d_bo *)entry->key;
+                        job->referenced_size -= bo->size;
+                        uint32_t *bo_handles = (void *)(uintptr_t)job->submit.bo_handles;
+                        for (int i = 0; i < job->submit.bo_handle_count; i++) {
+                                if (bo_handles[i] == bo->handle) {
+                                        memmove(&bo_handles[i], &bo_handles[i + 1],
+                                        (job->submit.bo_handle_count - i - 1) * sizeof(uint32_t));
+                                        job->submit.bo_handle_count--;
+                                        break;
+                                }
+                        }
+                        v3d_bo_unreference(&bo);
+                };
+                _mesa_set_clear(job->bos, NULL);
+        }
+
         if (V3D_DBG(ALWAYS_FLUSH))
                 v3d_flush(pctx);
 }
