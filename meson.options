@@ -325,7 +325,11 @@ option(
 
 option(
   'gbm',
-  type : 'feature',
+  type : 'combo',
+  value : 'auto',
+  choices : [
+    'enabled', 'disabled', 'system', 'auto'
+  ],
   deprecated: {'true': 'enabled', 'false': 'disabled'},
   description : 'Build support for gbm platform'
 )

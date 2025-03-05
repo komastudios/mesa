@@ -462,10 +462,22 @@ if not (with_dri or with_gallium or with_glx != 'disabled')
   with_shared_glapi = false
 endif
 
-with_gbm = get_option('gbm') \
-  .require(system_has_kms_drm, error_message : 'GBM only supports DRM/KMS platforms') \
-  .disable_auto_if(not with_dri) \
-  .allowed()
+if get_option('gbm') == 'auto'
+  with_gbm = system_has_kms_drm and not with_dri
+  with_system_gbm = false
+elif get_option('gbm') == 'enabled' 
+  if not system_has_kms_drm
+    error('GBM only supports DRM/KMS platforms')
+  endif
+  with_gbm = true
+  with_system_gbm = false
+elif get_option('gbm') == 'disabled'
+  with_gbm = false
+  with_system_gbm = false
+elif get_option('gbm') == 'system'
+  with_gbm = true
+  with_system_gbm = true
+endif
 
 with_xlib_lease = get_option('xlib-lease') \
   .require(with_platform_x11 and (system_has_kms_drm or with_dri_platform == 'apple'), error_message : 'xlib-lease requires X11 and KMS/DRM support') \
@@ -2380,7 +2392,9 @@ endif
 summary(egl_summary, section: 'EGL', bool_yn: true, list_sep: ' ')
 
 gbm_summary = {'Enabled': with_gbm}
-if with_gbm
+if with_system_gbm
+  gbm_summary += {'System': true}
+elif with_gbm
   gbm_summary += {'Backends path': gbm_backends_path}
 endif
 summary(gbm_summary, section: 'GBM', bool_yn: true, list_sep: ' ')
