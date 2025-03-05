@@ -255,6 +255,30 @@ nvkmd_nouveau_exec_ctx_sync(struct nvkmd_ctx *_ctx,
    return VK_SUCCESS;
 }
 
+static VkResult
+nvkmd_nouveau_exec_ctx_bind_zcull_ctxsw(struct nvkmd_ctx *_ctx,
+                                        struct vk_object_base *log_obj,
+                                        struct nvkmd_mem *mem)
+{
+   struct nvkmd_nouveau_exec_ctx *ctx = nvkmd_nouveau_exec_ctx(_ctx);
+
+   struct drm_nouveau_set_zcull_ctxsw_buffer args = {
+      .addr = mem ? mem->va->addr : 0,
+      .channel = ctx->ws_ctx->channel,
+   };
+
+   int err = drmCommandWrite(ctx->ws_dev->fd,
+                             DRM_NOUVEAU_SET_ZCULL_CTXSW_BUFFER,
+                             &args, sizeof(args));
+
+   if (err) {
+      return vk_errorf(log_obj, VK_ERROR_UNKNOWN,
+                       "SET_ZCULL_CTXSW_BUFFER failed: %m");
+   }
+
+   return VK_SUCCESS;
+}
+
 const struct nvkmd_ctx_ops nvkmd_nouveau_exec_ctx_ops = {
    .destroy = nvkmd_nouveau_exec_ctx_destroy,
    .wait = nvkmd_nouveau_exec_ctx_wait,
@@ -262,6 +286,7 @@ const struct nvkmd_ctx_ops nvkmd_nouveau_exec_ctx_ops = {
    .signal = nvkmd_nouveau_exec_ctx_signal,
    .flush = nvkmd_nouveau_exec_ctx_flush,
    .sync = nvkmd_nouveau_exec_ctx_sync,
+   .bind_zcull_ctxsw = nvkmd_nouveau_exec_ctx_bind_zcull_ctxsw,
 };
 
 static VkResult

@@ -30,7 +30,7 @@ nvk_queue_state_init(struct nvk_queue_state *qs)
 }
 
 static void
-nvk_queue_state_finish(struct nvk_device *dev,
+nvk_queue_state_finish(struct nvk_queue *queue,
                        struct nvk_queue_state *qs)
 {
    if (qs->images.mem)
@@ -39,6 +39,16 @@ nvk_queue_state_finish(struct nvk_device *dev,
       nvkmd_mem_unref(qs->samplers.mem);
    if (qs->slm.mem)
       nvkmd_mem_unref(qs->slm.mem);
+   if (qs->zcull_ctxsw.mem) {
+      VkResult result = nvkmd_ctx_bind_zcull_ctxsw(queue->exec_ctx,
+                                                   &queue->vk.base, NULL);
+      if (result == VK_SUCCESS) {
+         nvkmd_mem_unref(qs->zcull_ctxsw.mem);
+      } else {
+         vk_loge(VK_LOG_OBJS(&queue->vk.base),
+                 "Failed to unbind zcull ctxsw buf");
+      }
+   }
 }
 
 static VkResult
@@ -50,6 +60,23 @@ nvk_queue_state_update(struct nvk_queue *queue,
    struct nvkmd_mem *mem;
    uint32_t alloc_count, bytes_per_warp, bytes_per_tpc;
    bool dirty = false;
+
+   if ((queue->engines & NVKMD_ENGINE_3D) &&
+       pdev->info.has_zcull_info && !qs->zcull_ctxsw.mem)
+   {
+      VkResult result = nvkmd_dev_alloc_mem(dev->nvkmd, &dev->vk.base,
+                                            pdev->info.zcull_info.ctxsw_size,
+                                            pdev->info.zcull_info.ctxsw_align,
+                                            NVKMD_MEM_LOCAL, &qs->zcull_ctxsw.mem);
+      if (result != VK_SUCCESS)
+         return result;
+
+      result = nvkmd_ctx_bind_zcull_ctxsw(queue->exec_ctx, &queue->vk.base,
+                                          qs->zcull_ctxsw.mem);
+
+      if (result != VK_SUCCESS)
+         return result;
+   }
 
    mem = nvk_descriptor_table_get_mem_ref(&dev->images, &alloc_count);
    if (qs->images.mem != mem || qs->images.alloc_count != alloc_count) {
@@ -575,7 +602,7 @@ fail_exec_ctx:
    if (queue->exec_ctx != NULL)
       nvkmd_ctx_destroy(queue->exec_ctx);
 fail_init:
-   nvk_queue_state_finish(dev, &queue->state);
+   nvk_queue_state_finish(queue, &queue->state);
    vk_queue_finish(&queue->vk);
 
    return result;
@@ -588,7 +615,7 @@ nvk_queue_finish(struct nvk_device *dev, struct nvk_queue *queue)
       nvk_upload_queue_sync(dev, &dev->upload);
       nvkmd_mem_unref(queue->draw_cb0);
    }
-   nvk_queue_state_finish(dev, &queue->state);
+   nvk_queue_state_finish(queue, &queue->state);
    if (queue->bind_ctx != NULL)
       nvkmd_ctx_destroy(queue->bind_ctx);
    if (queue->exec_ctx != NULL)
