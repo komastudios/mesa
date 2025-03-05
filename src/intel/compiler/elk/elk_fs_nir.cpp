@@ -3213,8 +3213,8 @@ emit_non_coherent_fb_read(nir_to_elk_state &ntb, const fs_builder &bld, const el
 
    /* Calculate the fragment coordinates. */
    const elk_fs_reg coords = bld.vgrf(ELK_REGISTER_TYPE_UD, 3);
-   bld.MOV(offset(coords, bld, 0), s.pixel_x);
-   bld.MOV(offset(coords, bld, 1), s.pixel_y);
+   bld.MOV(offset(coords, bld, 0), s.uw_pixel_x);
+   bld.MOV(offset(coords, bld, 1), s.uw_pixel_y);
    bld.MOV(offset(coords, bld, 2), fetch_render_target_array_index(bld));
 
    /* Calculate the sample index and MCS payload when multisampling.  Luckily
@@ -3341,37 +3341,6 @@ emit_is_helper_invocation(nir_to_elk_state &ntb, elk_fs_reg result)
       elk_emit_predicate_on_sample_mask(b.at(NULL, mov), mov);
       mov->predicate_inverse = true;
    }
-}
-
-static void
-emit_fragcoord_interpolation(nir_to_elk_state &ntb, elk_fs_reg wpos)
-{
-   const intel_device_info *devinfo = ntb.devinfo;
-   const fs_builder &bld = ntb.bld;
-   elk_fs_visitor &s = ntb.s;
-
-   assert(s.stage == MESA_SHADER_FRAGMENT);
-
-   /* gl_FragCoord.x */
-   bld.MOV(wpos, s.pixel_x);
-   wpos = offset(wpos, bld, 1);
-
-   /* gl_FragCoord.y */
-   bld.MOV(wpos, s.pixel_y);
-   wpos = offset(wpos, bld, 1);
-
-   /* gl_FragCoord.z */
-   if (devinfo->ver >= 6) {
-      bld.MOV(wpos, s.pixel_z);
-   } else {
-      bld.emit(ELK_FS_OPCODE_LINTERP, wpos,
-               s.delta_xy[ELK_BARYCENTRIC_PERSPECTIVE_PIXEL],
-               s.interp_reg(bld, VARYING_SLOT_POS, 2, 0));
-   }
-   wpos = offset(wpos, bld, 1);
-
-   /* gl_FragCoord.w: Already set up in emit_interpolation */
-   bld.MOV(wpos, s.wpos_w);
 }
 
 static elk_fs_reg
@@ -3965,7 +3934,25 @@ fs_nir_emit_fs_intrinsic(nir_to_elk_state &ntb,
    }
 
    case nir_intrinsic_load_frag_coord:
-      emit_fragcoord_interpolation(ntb, dest);
+      unreachable("should be lowered by elk_nir_lower_frag_coord");
+
+   case nir_intrinsic_load_pixel_coord:
+      /* gl_FragCoord.xy: Just load the pixel xy from the payload, or more
+      * complicated emit_interpolation_setup_gfx6 setup
+      */
+      dest = retype(dest, ELK_REGISTER_TYPE_UW);
+      bld.MOV(dest, s.uw_pixel_x);
+      bld.MOV(offset(dest, bld, 1), s.uw_pixel_y);
+      break;
+
+   case nir_intrinsic_load_frag_coord_z:
+      bld.MOV(dest, s.pixel_z);
+      break;
+
+   case nir_intrinsic_load_frag_coord_w:
+      /* Lowered to interpolation pre-gen6. */
+      assert(devinfo->ver >= 6);
+      bld.emit(ELK_SHADER_OPCODE_RCP, dest, fetch_payload_reg(bld, fs_payload().source_w_reg));
       break;
 
    case nir_intrinsic_load_interpolated_input: {
@@ -3974,8 +3961,6 @@ fs_nir_emit_fs_intrinsic(nir_to_elk_state &ntb,
       nir_intrinsic_instr *bary_intrinsic =
          nir_instr_as_intrinsic(instr->src[0].ssa->parent_instr);
       nir_intrinsic_op bary_intrin = bary_intrinsic->intrinsic;
-      enum glsl_interp_mode interp_mode =
-         (enum glsl_interp_mode) nir_intrinsic_interp_mode(bary_intrinsic);
       elk_fs_reg dst_xy;
 
       if (bary_intrin == nir_intrinsic_load_barycentric_at_offset ||
@@ -3995,13 +3980,7 @@ fs_nir_emit_fs_intrinsic(nir_to_elk_state &ntb,
          interp.type = ELK_REGISTER_TYPE_F;
          dest.type = ELK_REGISTER_TYPE_F;
 
-         if (devinfo->ver < 6 && interp_mode == INTERP_MODE_SMOOTH) {
-            elk_fs_reg tmp = s.vgrf(glsl_float_type());
-            bld.emit(ELK_FS_OPCODE_LINTERP, tmp, dst_xy, interp);
-            bld.MUL(offset(dest, bld, i), tmp, s.pixel_w);
-         } else {
-            bld.emit(ELK_FS_OPCODE_LINTERP, offset(dest, bld, i), dst_xy, interp);
-         }
+         bld.emit(ELK_FS_OPCODE_LINTERP, offset(dest, bld, i), dst_xy, interp);
       }
       break;
    }
