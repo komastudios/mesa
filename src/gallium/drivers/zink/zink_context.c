@@ -1351,9 +1351,10 @@ update_existing_vbo(struct zink_context *ctx, unsigned slot)
 }
 
 static void
-zink_set_vertex_buffers(struct pipe_context *pctx,
-                        unsigned num_buffers,
-                        const struct pipe_vertex_buffer *buffers)
+zink_set_vertex_buffers_internal(struct pipe_context *pctx,
+                                 unsigned num_buffers,
+                                 const struct pipe_vertex_buffer *buffers,
+                                 bool optimal)
 {
    struct zink_context *ctx = zink_context(pctx);
    const bool have_input_state = zink_screen(pctx->screen)->info.have_EXT_vertex_input_dynamic_state;
@@ -1392,16 +1393,34 @@ zink_set_vertex_buffers(struct pipe_context *pctx,
       update_existing_vbo(ctx, i);
       pipe_resource_reference(&ctx->vertex_buffers[i].buffer.resource, NULL);
    }
-   if (need_state_change)
-      ctx->vertex_state_changed = true;
-   else if (!have_input_state && ctx->gfx_pipeline_state.vertex_buffers_enabled_mask != enabled_buffers)
-      ctx->vertex_state_changed = true;
+   if (!optimal) {
+      if (need_state_change)
+         ctx->vertex_state_changed = true;
+      else if (!have_input_state && ctx->gfx_pipeline_state.vertex_buffers_enabled_mask != enabled_buffers)
+         ctx->vertex_state_changed = true;
+   }
    ctx->gfx_pipeline_state.vertex_buffers_enabled_mask = enabled_buffers;
    ctx->vertex_buffers_dirty = num_buffers > 0;
 #ifndef NDEBUG
    u_foreach_bit(b, enabled_buffers)
       assert(ctx->vertex_buffers[b].buffer.resource);
 #endif
+}
+
+static void
+zink_set_vertex_buffers(struct pipe_context *pctx,
+                        unsigned num_buffers,
+                        const struct pipe_vertex_buffer *buffers)
+{
+   zink_set_vertex_buffers_internal(pctx, num_buffers, buffers, false);
+}
+
+static void
+zink_set_vertex_buffers_optimal(struct pipe_context *pctx,
+                                 unsigned num_buffers,
+                                 const struct pipe_vertex_buffer *buffers)
+{
+   zink_set_vertex_buffers_internal(pctx, num_buffers, buffers, true);
 }
 
 static void
@@ -3164,11 +3183,6 @@ zink_batch_rp(struct zink_context *ctx)
       if (ctx->render_condition.query)
          zink_start_conditional_render(ctx);
       zink_clear_framebuffer(ctx, clear_buffers);
-      if (ctx->pipeline_changed[0]) {
-         for (unsigned i = 0; i < ctx->fb_state.nr_cbufs; i++)
-            batch_ref_fb_surface(ctx, ctx->fb_state.cbufs[i]);
-         batch_ref_fb_surface(ctx, ctx->fb_state.zsbuf);
-      }
    }
    /* unable to previously determine that queries didn't split renderpasses: ensure queries start inside renderpass */
    if (!ctx->queries_disabled && maybe_has_query_ends) {
@@ -3646,6 +3660,7 @@ unbind_fb_surface(struct zink_context *ctx, struct pipe_surface *surf, unsigned 
       }
    }
    res->fb_binds &= ~BITFIELD_BIT(idx);
+   batch_ref_fb_surface(ctx, surf);
    /* this is called just before the resource loses a reference, so a refcount==1 means the resource will be destroyed */
    if (!res->fb_bind_count && res->base.b.reference.count > 1) {
       if (ctx->track_renderpasses && !ctx->blitting) {
@@ -3844,7 +3859,6 @@ zink_set_framebuffer_state(struct pipe_context *pctx,
          }
          res->fb_bind_count++;
          res->fb_binds |= BITFIELD_BIT(i);
-         batch_ref_fb_surface(ctx, ctx->fb_state.cbufs[i]);
          if (util_format_has_alpha1(psurf->format)) {
             if (!res->valid && !zink_fb_clear_full_exists(ctx, i))
                ctx->void_clears |= (PIPE_CLEAR_COLOR0 << i);
@@ -3856,7 +3870,6 @@ zink_set_framebuffer_state(struct pipe_context *pctx,
       struct pipe_surface *psurf = ctx->fb_state.zsbuf;
       struct zink_surface *transient = zink_transient_surface(psurf);
       check_framebuffer_surface_mutable(pctx, psurf);
-      batch_ref_fb_surface(ctx, ctx->fb_state.zsbuf);
       if (transient || psurf->nr_samples)
          ctx->transient_attachments |= BITFIELD_BIT(PIPE_MAX_COLOR_BUFS);
       if (!samples)
@@ -3903,7 +3916,7 @@ zink_set_framebuffer_state(struct pipe_context *pctx,
    }
    if (depth_bias_scale_factor != ctx->depth_bias_scale_factor &&
        ctx->rast_state && ctx->rast_state->base.offset_units_unscaled)
-      ctx->rast_state_changed = true;
+      ctx->depth_bias_changed = true;
    rebind_fb_state(ctx, NULL, true);
    ctx->fb_state.samples = MAX2(samples, 1);
    zink_update_framebuffer_state(ctx);
@@ -4771,11 +4784,18 @@ zink_copy_image_buffer(struct zink_context *ctx, struct zink_resource *dst, stru
                             needs_present_readback ?
                             ctx->bs->cmdbuf :
                             buf2img ? zink_get_cmdbuf(ctx, buf, use_img) : zink_get_cmdbuf(ctx, use_img, buf);
-   zink_batch_reference_resource_rw(ctx, use_img, buf2img);
-   zink_batch_reference_resource_rw(ctx, buf, !buf2img);
    if (unsync) {
+      zink_batch_resource_usage_set(ctx->bs, use_img, buf2img, use_img->obj->is_buffer);
+      if (!zink_batch_reference_resource_move_unsync(ctx, use_img))
+         zink_resource_object_reference(NULL, NULL, use_img->obj);
+      zink_batch_resource_usage_set(ctx->bs, buf, !buf2img, buf->obj->is_buffer);
+      if (!zink_batch_reference_resource_move_unsync(ctx, buf))
+         zink_resource_object_reference(NULL, NULL, buf->obj);
       ctx->bs->has_unsync = true;
       use_img->obj->unsync_access = true;
+   } else {
+      zink_batch_reference_resource_rw(ctx, use_img, buf2img);
+      zink_batch_reference_resource_rw(ctx, buf, !buf2img);
    }
 
    /* we're using u_transfer_helper_deinterleave, which means we'll be getting PIPE_MAP_* usage
@@ -5325,7 +5345,10 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
       ctx->base.set_shader_buffers = zink_set_shader_buffers_lazy;
    }
    ctx->base.set_polygon_stipple = zink_set_polygon_stipple;
-   ctx->base.set_vertex_buffers = zink_set_vertex_buffers;
+   if (screen->info.have_EXT_vertex_input_dynamic_state && screen->info.have_EXT_extended_dynamic_state)
+      ctx->base.set_vertex_buffers = zink_set_vertex_buffers_optimal;
+   else
+      ctx->base.set_vertex_buffers = zink_set_vertex_buffers;
    ctx->base.set_viewport_states = zink_set_viewport_states;
    ctx->base.set_scissor_states = zink_set_scissor_states;
    ctx->base.set_inlinable_constants = zink_set_inlinable_constants;
