@@ -873,7 +873,6 @@ intrinsic("task_payload_atomic",  src_comp=[1, 1], dest_comp=1, indices=[BASE, A
 intrinsic("global_atomic",  src_comp=[1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_2x32",  src_comp=[2, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_amd",  src_comp=[1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic_ir3",  src_comp=[2, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_agx",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
 
 intrinsic("deref_atomic_swap",  src_comp=[-1, 1, 1], dest_comp=1, indices=[ACCESS, ATOMIC_OP])
@@ -883,7 +882,6 @@ intrinsic("task_payload_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=
 intrinsic("global_atomic_swap",  src_comp=[1, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_swap_2x32",  src_comp=[2, 1, 1], dest_comp=1, indices=[ATOMIC_OP])
 intrinsic("global_atomic_swap_amd",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
-intrinsic("global_atomic_swap_ir3",  src_comp=[2, 1, 1], dest_comp=1, indices=[BASE, ATOMIC_OP])
 intrinsic("global_atomic_swap_agx",  src_comp=[1, 1, 1, 1], dest_comp=1, indices=[ATOMIC_OP, SIGN_EXTEND])
 
 def system_value(name, dest_comp, indices=[], bit_sizes=[32], can_reorder=True):
@@ -1416,11 +1414,11 @@ load("shared_ir3", [1], [BASE, ALIGN_MUL, ALIGN_OFFSET], [CAN_ELIMINATE])
 
 # src[] = { value, address(vec2 of hi+lo uint32_t), offset }.
 # const_index[] = { write_mask, align_mul, align_offset }
-store("global_ir3", [2, 1], indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET])
+store("global_ir3", [1, 1], indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET])
 # src[] = { address(vec2 of hi+lo uint32_t), offset }.
 # const_index[] = { access, align_mul, align_offset }
 # the alignment applies to the base address
-load("global_ir3", [2, 1], indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET, RANGE_BASE, RANGE], flags=[CAN_ELIMINATE])
+load("global_ir3", [1, 1], indices=[ACCESS, ALIGN_MUL, ALIGN_OFFSET, RANGE_BASE, RANGE], flags=[CAN_ELIMINATE])
 
 # Etnaviv-specific load/glboal intrinsics. They take a 32-bit base address and
 # a 32-bit offset, which doesn't need to be an immediate.
@@ -1470,7 +1468,7 @@ intrinsic("copy_ubo_to_uniform_ir3", [1, 1], indices=[BASE, RANGE])
 # IR3-specific intrinsic for ldg.k.
 # base is an offset to apply to the address in bytes, range_base is the
 # const file base in components, range is the amount to copy in vec4's.
-intrinsic("copy_global_to_uniform_ir3", [2], indices=[BASE, RANGE_BASE, RANGE])
+intrinsic("copy_global_to_uniform_ir3", [1], indices=[BASE, RANGE_BASE, RANGE])
 
 # IR3-specific intrinsic for stsc. Loads from push consts to constant file
 # Should be used in the shader preamble.

@@ -215,6 +215,9 @@ struct ir3_instruction *ir3_create_collect(struct ir3_builder *build,
                                            unsigned arrsz);
 void ir3_split_dest(struct ir3_builder *build, struct ir3_instruction **dst,
                     struct ir3_instruction *src, unsigned base, unsigned n);
+struct ir3_instruction *ir3_split_off_scalar(struct ir3_builder *build,
+                                             struct ir3_instruction *src,
+                                             unsigned bit_size);
 void ir3_handle_bindless_cat6(struct ir3_instruction *instr, nir_src rsrc);
 void ir3_handle_nonuniform(struct ir3_instruction *instr,
                            nir_intrinsic_instr *intrin);

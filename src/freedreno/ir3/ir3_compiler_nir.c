@@ -655,6 +655,12 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
       dst = create_cov(ctx, dst_sz, src[0], bs[0], alu->op);
       break;
 
+   case nir_op_u2u64:
+      assert(dst_sz == 1);
+      dst.rpts[0] = ir3_64b(b, ir3_MOV(b, src[0].rpts[0], TYPE_U32),
+                            create_immed_shared(b, 0, use_shared));
+      break;
+
    case nir_op_fquantize2f16:
       dst = create_cov(ctx, dst_sz,
                        create_cov(ctx, dst_sz, src[0], 32, nir_op_f2f16_rtne),
@@ -1083,17 +1089,15 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
    case nir_op_pack_64_2x32_split: {
        struct ir3_instruction *r0 = ir3_MOV(b, src[0].rpts[0], TYPE_U32);
        struct ir3_instruction *r1 = ir3_MOV(b, src[1].rpts[0], TYPE_U32);
-       dst.rpts[0] = r0;
-       dst.rpts[1] = r1;
-       dst_sz = 2;
+       dst.rpts[0] = ir3_64b(b, r0, r1);
       break;
    }
    case nir_op_unpack_64_2x32_split_x: {
-       ir3_split_dest(b, &dst.rpts[0], src[0].rpts[0], 0, 1);
+      dst.rpts[0] = ir3_MOV(b, ir3_64b_get_lo(src[0].rpts[0]), TYPE_U32);
       break;
    }
    case nir_op_unpack_64_2x32_split_y: {
-       ir3_split_dest(b, &dst.rpts[0], src[0].rpts[0], 1, 1);
+      dst.rpts[0] = ir3_MOV(b, ir3_64b_get_hi(src[0].rpts[0]), TYPE_U32);
       break;
    }
    case nir_op_udot_4x8_uadd:
@@ -1231,9 +1235,8 @@ emit_intrinsic_copy_global_to_uniform(struct ir3_context *ctx,
    if (dst_hi)
       a1 = ir3_get_addr1(ctx, dst_hi << 8);
 
-   struct ir3_instruction *addr_lo = ir3_get_src(ctx, &intr->src[0])[0];
-   struct ir3_instruction *addr_hi = ir3_get_src(ctx, &intr->src[0])[1];
-   struct ir3_instruction *addr = ir3_collect(b, addr_lo, addr_hi);
+   struct ir3_instruction *addr =
+      ir3_collect(b, ir3_get_src(ctx, &intr->src[0])[0]);
    struct ir3_instruction *ldg = ir3_LDG_K(b, create_immed(b, dst_lo), 0, addr, 0, 
                                            create_immed(b, addr_offset), 0,
                                            create_immed(b, size), 0);
@@ -3327,8 +3330,8 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
    case nir_intrinsic_bindless_resource_ir3:
       dst[0] = ir3_get_src(ctx, &intr->src[0])[0];
       break;
-   case nir_intrinsic_global_atomic_ir3:
-   case nir_intrinsic_global_atomic_swap_ir3: {
+   case nir_intrinsic_global_atomic:
+   case nir_intrinsic_global_atomic_swap: {
       dst[0] = ctx->funcs->emit_intrinsic_atomic_global(ctx, intr);
       break;
    }
@@ -3474,7 +3477,7 @@ emit_load_const(struct ir3_context *ctx, nir_load_const_instr *instr)
 {
    unsigned bit_size = ir3_bitsize(ctx, instr->def.bit_size);
    struct ir3_instruction **dst =
-      ir3_get_dst_ssa(ctx, &instr->def, instr->def.num_components * ((bit_size == 64) ? 2 : 1));
+      ir3_get_dst_ssa(ctx, &instr->def, instr->def.num_components);
 
    if (bit_size <= 8) {
       for (int i = 0; i < instr->def.num_components; i++)
@@ -3490,10 +3493,7 @@ emit_load_const(struct ir3_context *ctx, nir_load_const_instr *instr)
    } else {
       assert(instr->def.num_components == 1);
       for (int i = 0; i < instr->def.num_components; i++) {
-         dst[2 * i] = create_immed_typed(
-            &ctx->build, (uint32_t)(instr->value[i].u64), TYPE_U32);
-         dst[2 * i + 1] = create_immed_typed(
-            &ctx->build, (uint32_t)(instr->value[i].u64 >> 32), TYPE_U32);
+         dst[i] = ir3_64b_immed(&ctx->build, instr->value[i].u64);
       }
    }
 }

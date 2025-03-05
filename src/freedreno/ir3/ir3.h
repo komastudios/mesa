@@ -2658,6 +2658,44 @@ ir3_BALLOT_MACRO(struct ir3_builder *build, struct ir3_instruction *src,
    return instr;
 }
 
+static inline struct ir3_instruction *
+ir3_64b(struct ir3_builder *build, struct ir3_instruction *lo,
+        struct ir3_instruction *hi)
+{
+   struct ir3_instruction *instr = ir3_build_instr(build, OPC_META_64B, 1, 2);
+
+   assert((lo->dsts[0]->flags & IR3_REG_SHARED) ==
+          (hi->dsts[0]->flags & IR3_REG_SHARED));
+
+   /* Dummy dst so that ir3_get_src_shared can do its job. */
+   __ssa_dst(instr)->flags |= (lo->dsts[0]->flags & IR3_REG_SHARED);
+
+   __ssa_src(instr, lo, 0);
+   __ssa_src(instr, hi, 0);
+   return instr;
+}
+
+static inline struct ir3_instruction *
+ir3_64b_immed(struct ir3_builder *build, uint64_t val)
+{
+   return ir3_64b(build, create_immed(build, (uint32_t)val),
+                  create_immed(build, val >> 32));
+}
+
+static inline struct ir3_instruction *
+ir3_64b_get_lo(struct ir3_instruction *instr)
+{
+   assert(instr->opc == OPC_META_64B);
+   return instr->srcs[0]->def->instr;
+}
+
+static inline struct ir3_instruction *
+ir3_64b_get_hi(struct ir3_instruction *instr)
+{
+   assert(instr->opc == OPC_META_64B);
+   return instr->srcs[1]->def->instr;
+}
+
 /* clang-format off */
 #define __INSTR0(flag, name, opc)                                              \
 static inline struct ir3_instruction *ir3_##name(struct ir3_builder *build)    \
