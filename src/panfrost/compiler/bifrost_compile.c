@@ -1790,7 +1790,7 @@ bi_emit_ld_tile(bi_builder *b, nir_intrinsic_instr *instr)
 
    bi_index pi = bi_pixel_indices(b, target, sample);
 
-   if (!nir_src_is_const(instr->src[0]))
+   if (!is_zs && !nir_src_is_const(instr->src[0]))
       pi = bi_lshift_or(b, 32, bi_src_index(&instr->src[0]), pi, bi_imm_u8(8));
 
    if (!nir_src_is_const(instr->src[1]))
