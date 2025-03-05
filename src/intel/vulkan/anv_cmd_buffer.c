@@ -455,7 +455,7 @@ anv_cmd_buffer_set_ray_query_buffer(struct anv_cmd_buffer *cmd_buffer,
       if (bo == NULL) {
          struct anv_bo *new_bo;
          VkResult result = anv_device_alloc_bo(device, "RT queries shadow",
-                                               ray_shadow_size,
+                                               ray_shadow_size, 0,
                                                ANV_BO_ALLOC_INTERNAL, /* alloc_flags */
                                                0, /* explicit_address */
                                                &new_bo);
@@ -1444,7 +1444,7 @@ void anv_CmdSetRayTracingPipelineStackSizeKHR(
    if (bo == NULL) {
       struct anv_bo *new_bo;
       VkResult result = anv_device_alloc_bo(device, "RT scratch",
-                                            rt->scratch.layout.total_size,
+                                            rt->scratch.layout.total_size, 0,
                                             ANV_BO_ALLOC_INTERNAL, /* alloc_flags */
                                             0, /* explicit_address */
                                             &new_bo);
