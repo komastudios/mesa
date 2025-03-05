@@ -2046,12 +2046,19 @@ tu_trace_end_render_pass(struct tu_cmd_buffer *cmd, bool gmem)
                     offsetof(fd_lrzfc_layout<CHIP>, dir_track);
    }
 
+   int32_t lrz_disabled_at_draw = cmd->state.rp.lrz_disabled_at_draw
+                                     ? cmd->state.rp.lrz_disabled_at_draw
+                                     : -1;
+   int32_t lrz_write_disabled_at_draw = cmd->state.rp.lrz_write_disabled_at_draw
+                                     ? cmd->state.rp.lrz_write_disabled_at_draw
+                                     : -1;
    trace_end_render_pass(&cmd->trace, &cmd->cs, gmem,
                          cmd->state.rp.gmem_disable_reason,
                          cmd->state.rp.drawcall_count,
                          avg_per_sample_bandwidth, cmd->state.lrz.valid,
                          cmd->state.rp.lrz_disable_reason,
-                         cmd->state.rp.lrz_disabled_at_draw, addr);
+                         lrz_disabled_at_draw,
+                         lrz_write_disabled_at_draw, addr);
 }
 
 static void
@@ -4501,6 +4508,11 @@ tu_render_pass_state_merge(struct tu_render_pass_state *dst,
       dst->lrz_disabled_at_draw =
          dst->drawcall_count + src->lrz_disabled_at_draw;
    }
+   if (!dst->lrz_write_disabled_at_draw &&
+       src->lrz_write_disabled_at_draw) {
+      dst->lrz_write_disabled_at_draw =
+         dst->drawcall_count + src->lrz_write_disabled_at_draw;
+   }
    if (!dst->gmem_disable_reason && src->gmem_disable_reason) {
       dst->gmem_disable_reason = src->gmem_disable_reason;
    }
@@ -5770,6 +5782,7 @@ tu6_build_depth_plane_z_mode(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
 {
    enum a6xx_ztest_mode zmode = A6XX_EARLY_Z;
    bool depth_test_enable = cmd->vk.dynamic_graphics_state.ds.depth.test_enable;
+   bool stencil_test_enable = cmd->vk.dynamic_graphics_state.ds.stencil.test_enable;
    bool depth_write = tu6_writes_depth(cmd, depth_test_enable);
    bool stencil_write = tu6_writes_stencil(cmd);
    const struct tu_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
@@ -5787,6 +5800,7 @@ tu6_build_depth_plane_z_mode(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
                  : A6XX_LATE_Z;
    }
 
+   bool ds_test_enable = depth_test_enable || stencil_test_enable;
    bool force_late_z = 
       (subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED &&
        pass->attachments[subpass->depth_stencil_attachment.attachment].format
@@ -5795,7 +5809,7 @@ tu6_build_depth_plane_z_mode(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       /* alpha-to-coverage can behave like a discard. */
       cmd->vk.dynamic_graphics_state.ms.alpha_to_coverage_enable;
    if ((force_late_z && !fs->variant->fs.early_fragment_tests) ||
-       !depth_test_enable)
+       !ds_test_enable)
       zmode = A6XX_LATE_Z;
 
    /* User defined early tests take precedence above all else */
