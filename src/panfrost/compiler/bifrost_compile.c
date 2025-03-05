@@ -1785,6 +1785,9 @@ bi_emit_ld_tile(bi_builder *b, nir_intrinsic_instr *instr)
       assert(target < 8);
    }
 
+   if (nir_src_is_const(instr->src[1]))
+      sample = nir_src_as_uint(instr->src[1]);
+
    bi_index pi = bi_pixel_indices(b, target, sample);
 
    if (!nir_src_is_const(instr->src[0]))
