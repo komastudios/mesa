@@ -211,12 +211,6 @@ struct dmabuf_feedback {
 };
 #endif
 
-enum dri2_egl_driver_fail {
-   DRI2_EGL_DRIVER_LOADED = 0,
-   DRI2_EGL_DRIVER_FAILED = 1,
-   DRI2_EGL_DRIVER_PREFER_ZINK = 2,
-};
-
 struct dri2_egl_display {
    const struct dri2_egl_display_vtbl *vtbl;
 
@@ -248,7 +242,6 @@ struct dri2_egl_display {
 
    bool has_compression_modifiers;
    bool own_device;
-   bool invalidate_available;
    bool kopper;
    bool kopper_without_modifiers;
    bool swrast;
@@ -504,7 +497,9 @@ dri2_create_image_from_dri(_EGLDisplay *disp, struct dri_image *dri_image);
 
 #ifdef HAVE_X11_PLATFORM
 EGLBoolean
-dri2_initialize_x11(_EGLDisplay *disp);
+dri2_initialize_x11_dri2(_EGLDisplay *disp);
+EGLBoolean
+dri2_initialize_x11(_EGLDisplay *disp, bool *allow_dri2);
 void
 dri2_teardown_x11(struct dri2_egl_display *dri2_dpy);
 unsigned int
@@ -613,7 +608,7 @@ void
 dri2_display_destroy(_EGLDisplay *disp);
 
 struct dri2_egl_display *
-dri2_display_create(void);
+dri2_display_create(_EGLDisplay *disp);
 
 EGLBoolean
 dri2_init_surface(_EGLSurface *surf, _EGLDisplay *disp, EGLint type,
