@@ -127,11 +127,13 @@ endif
 if with_glx == 'dri'
   subdir('glx')
 endif
-if with_gbm
+
+if with_system_gbm
+  dep_gbm = dependency('gbm')
+elif with_gbm
   subdir('gbm')
-else
-  inc_gbm = []
 endif
+
 if with_egl
   subdir('egl')
 endif
@@ -139,6 +141,10 @@ if with_gallium and with_gbm
   if with_glx == 'dri' or with_platform_x11 or with_platform_xcb
     subdir('gallium/targets/dril')
   endif
+endif
+
+if with_gbm and with_dri2
+  subdir('gbm/backends/dri')
 endif
 
 # This must be after at least mesa, glx, and gallium, since libgl will be
