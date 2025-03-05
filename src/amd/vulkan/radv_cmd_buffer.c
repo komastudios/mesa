@@ -1036,9 +1036,8 @@ radv_get_line_mode(const struct radv_cmd_buffer *cmd_buffer)
 
    const unsigned rast_prim = radv_get_rasterization_prim(cmd_buffer);
 
-   bool draw_lines = radv_rast_prim_is_line(rast_prim) || radv_polygon_mode_is_line(d->vk.rs.polygon_mode);
-   draw_lines &= !radv_rast_prim_is_point(rast_prim);
-   draw_lines &= !radv_polygon_mode_is_point(d->vk.rs.polygon_mode);
+   const bool draw_lines = (radv_rast_prim_is_line(rast_prim) && !radv_polygon_mode_is_point(d->vk.rs.polygon_mode)) ||
+                           (radv_polygon_mode_is_line(d->vk.rs.polygon_mode) && !radv_rast_prim_is_point(rast_prim));
    if (draw_lines)
       return d->vk.rs.line.mode;
 
@@ -2878,8 +2877,13 @@ radv_emit_graphics_pipeline(struct radv_cmd_buffer *cmd_buffer)
           radv_rast_prim_is_points_or_lines(pipeline->rast_prim))
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_GUARDBAND;
 
-      if (cmd_buffer->state.emitted_graphics_pipeline->rast_prim != pipeline->rast_prim)
-         cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_RASTERIZATION_SAMPLES;
+      if (cmd_buffer->state.emitted_graphics_pipeline->rast_prim != pipeline->rast_prim) {
+         cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_PRIMITIVE_TOPOLOGY;
+
+         if (radv_rast_prim_is_line(cmd_buffer->state.emitted_graphics_pipeline->rast_prim) !=
+             radv_rast_prim_is_line(pipeline->rast_prim))
+            cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_RASTERIZATION_SAMPLES;
+      }
 
       if (cmd_buffer->state.emitted_graphics_pipeline->ms.min_sample_shading != pipeline->ms.min_sample_shading ||
           cmd_buffer->state.emitted_graphics_pipeline->uses_out_of_order_rast != pipeline->uses_out_of_order_rast ||
@@ -4872,8 +4876,8 @@ lookup_vs_prolog(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *v
    const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_vertex_input_state *vi_state = &cmd_buffer->state.vertex_input;
 
-   unsigned num_attributes = util_last_bit(vs_shader->info.vs.vb_desc_usage_mask);
-   uint32_t attribute_mask = BITFIELD_MASK(num_attributes);
+   unsigned num_attributes = vs_shader->info.vs.num_attributes;
+   uint32_t attribute_mask = vs_shader->info.vs.vb_desc_usage_mask;
 
    uint32_t instance_rate_inputs = vi_state->instance_rate_inputs & attribute_mask;
    uint32_t zero_divisors = vi_state->zero_divisors & attribute_mask;
@@ -4907,12 +4911,6 @@ lookup_vs_prolog(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *v
    misaligned_mask &= attribute_mask;
    unaligned_mask &= attribute_mask;
 
-   const bool can_use_simple_input =
-      cmd_buffer->state.shaders[MESA_SHADER_VERTEX] &&
-      !cmd_buffer->state.shaders[MESA_SHADER_VERTEX]->info.merged_shader_compiled_separately &&
-      cmd_buffer->state.shaders[MESA_SHADER_VERTEX]->info.is_ngg == pdev->use_ngg &&
-      cmd_buffer->state.shaders[MESA_SHADER_VERTEX]->info.wave_size == pdev->ge_wave_size;
-
    /* The instance ID input VGPR is placed differently when as_ls=true. as_ls is also needed to
     * workaround the LS VGPR initialization bug.
     */
@@ -4920,7 +4918,7 @@ lookup_vs_prolog(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *v
 
    /* try to use a pre-compiled prolog first */
    struct radv_shader_part *prolog = NULL;
-   if (can_use_simple_input && !as_ls && !misaligned_mask && !vi_state->alpha_adjust_lo && !vi_state->alpha_adjust_hi) {
+   if (cmd_buffer->state.can_use_simple_vertex_input && !as_ls && !misaligned_mask && !vi_state->alpha_adjust_lo && !vi_state->alpha_adjust_hi) {
       if (!instance_rate_inputs) {
          prolog = device->simple_vs_prologs[num_attributes - 1];
       } else if (num_attributes <= 16 && !*nontrivial_divisors && !zero_divisors &&
@@ -5558,13 +5556,13 @@ radv_cmd_buffer_flush_dynamic_state(struct radv_cmd_buffer *cmd_buffer, const ui
       radv_emit_color_blend(cmd_buffer);
 
    if (states & (RADV_DYNAMIC_RASTERIZATION_SAMPLES | RADV_DYNAMIC_LINE_RASTERIZATION_MODE |
-                 RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_POLYGON_MODE | RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE))
+                 RADV_DYNAMIC_POLYGON_MODE | RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE))
       radv_emit_rasterization_samples(cmd_buffer);
 
    if (states &
        (RADV_DYNAMIC_LINE_STIPPLE_ENABLE | RADV_DYNAMIC_CONSERVATIVE_RAST_MODE | RADV_DYNAMIC_SAMPLE_LOCATIONS |
         RADV_DYNAMIC_SAMPLE_LOCATIONS_ENABLE | RADV_DYNAMIC_RASTERIZATION_SAMPLES |
-        RADV_DYNAMIC_LINE_RASTERIZATION_MODE | RADV_DYNAMIC_PRIMITIVE_TOPOLOGY | RADV_DYNAMIC_POLYGON_MODE))
+        RADV_DYNAMIC_LINE_RASTERIZATION_MODE | RADV_DYNAMIC_POLYGON_MODE))
       radv_emit_msaa_state(cmd_buffer);
 
    /* RADV_DYNAMIC_ATTACHMENT_FEEDBACK_LOOP_ENABLE is handled by radv_emit_db_shader_control. */
@@ -5793,15 +5791,11 @@ radv_flush_constants(struct radv_cmd_buffer *cmd_buffer, VkShaderStageFlags stag
    cmd_buffer->push_constant_stages |= dirty_stages;
 }
 
-void
+ALWAYS_INLINE void
 radv_get_vbo_info(const struct radv_cmd_buffer *cmd_buffer, uint32_t idx, struct radv_vbo_info *vbo_info)
 {
-   const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   const struct radv_physical_device *pdev = radv_device_physical(device);
    const struct radv_vertex_input_state *vi_state = &cmd_buffer->state.vertex_input;
    const uint32_t binding = vi_state->bindings[idx];
-
-   memset(vbo_info, 0, sizeof(*vbo_info));
 
    vbo_info->binding = binding;
    vbo_info->va = cmd_buffer->vertex_bindings[binding].addr;
@@ -5811,152 +5805,152 @@ radv_get_vbo_info(const struct radv_cmd_buffer *cmd_buffer, uint32_t idx, struct
    vbo_info->attrib_offset = vi_state->offsets[idx];
    vbo_info->attrib_index_offset = vi_state->attrib_index_offset[idx];
    vbo_info->attrib_format_size = vi_state->format_sizes[idx];
-
-   if (!(vi_state->nontrivial_formats & BITFIELD_BIT(idx))) {
-      const struct ac_vtx_format_info *vtx_info_table =
-         ac_get_vtx_format_info_table(pdev->info.gfx_level, pdev->info.family);
-      const struct ac_vtx_format_info *vtx_info = &vtx_info_table[vi_state->formats[idx]];
-      const uint32_t hw_format = vtx_info->hw_format[vtx_info->num_channels - 1];
-
-      if (pdev->info.gfx_level >= GFX10) {
-         vbo_info->non_trivial_format |= vtx_info->dst_sel | S_008F0C_FORMAT_GFX10(hw_format);
-      } else {
-         vbo_info->non_trivial_format |=
-            vtx_info->dst_sel | S_008F0C_NUM_FORMAT((hw_format >> 4) & 0x7) | S_008F0C_DATA_FORMAT(hw_format & 0xf);
-      }
-   }
+   vbo_info->non_trivial_format = vi_state->non_trivial_format[idx];
 }
 
-static void
-radv_write_vertex_descriptors(const struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *vs, void *vb_ptr)
+ALWAYS_INLINE static void
+radv_write_vertex_descriptor(const struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *vs, const unsigned i, const bool uses_dynamic_inputs, uint32_t *desc)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
    enum amd_gfx_level chip = pdev->info.gfx_level;
-   unsigned desc_index = 0;
-   uint32_t mask = vs->info.vs.vb_desc_usage_mask;
-   const bool uses_dynamic_inputs = vs->info.vs.dynamic_inputs;
    const struct radv_vertex_input_state *vi_state = &cmd_buffer->state.vertex_input;
 
-   while (mask) {
-      unsigned i = u_bit_scan(&mask);
-      uint32_t *desc = &((uint32_t *)vb_ptr)[desc_index++ * 4];
+   if (uses_dynamic_inputs && !(vi_state->attribute_mask & BITFIELD_BIT(i))) {
+      /* No vertex attribute description given: assume that the shader doesn't use this
+         * location (vb_desc_usage_mask can be larger than attribute usage) and use a null
+         * descriptor to avoid hangs (prologs load all attributes, even if there are holes).
+         */
+      memset(desc, 0, 4 * 4);
+      return;
+   }
 
-      if (uses_dynamic_inputs && !(vi_state->attribute_mask & BITFIELD_BIT(i))) {
-         /* No vertex attribute description given: assume that the shader doesn't use this
-          * location (vb_desc_usage_mask can be larger than attribute usage) and use a null
-          * descriptor to avoid hangs (prologs load all attributes, even if there are holes).
-          */
-         memset(desc, 0, 4 * 4);
-         continue;
-      }
+   struct radv_vbo_info vbo_info;
+   radv_get_vbo_info(cmd_buffer, i, &vbo_info);
 
-      struct radv_vbo_info vbo_info;
-      radv_get_vbo_info(cmd_buffer, i, &vbo_info);
+   uint32_t rsrc_word3;
 
-      uint32_t rsrc_word3;
+   if (uses_dynamic_inputs && vbo_info.non_trivial_format) {
+      rsrc_word3 = vbo_info.non_trivial_format;
+   } else {
+      rsrc_word3 = S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) | S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
+                     S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) | S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W);
 
-      if (uses_dynamic_inputs && vbo_info.non_trivial_format) {
-         rsrc_word3 = vbo_info.non_trivial_format;
+      if (pdev->info.gfx_level >= GFX10) {
+         rsrc_word3 |= S_008F0C_FORMAT_GFX10(V_008F0C_GFX10_FORMAT_32_UINT);
       } else {
-         rsrc_word3 = S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) | S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
-                      S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) | S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W);
+         rsrc_word3 |=
+            S_008F0C_NUM_FORMAT(V_008F0C_BUF_NUM_FORMAT_UINT) | S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32);
+      }
+   }
 
-         if (pdev->info.gfx_level >= GFX10) {
-            rsrc_word3 |= S_008F0C_FORMAT_GFX10(V_008F0C_GFX10_FORMAT_32_UINT);
-         } else {
-            rsrc_word3 |=
-               S_008F0C_NUM_FORMAT(V_008F0C_BUF_NUM_FORMAT_UINT) | S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32);
-         }
+   if (!vbo_info.va) {
+      if (uses_dynamic_inputs) {
+         /* Stride needs to be non-zero on GFX9, or else bounds checking is disabled. We need
+            * to include the format/word3 so that the alpha channel is 1 for formats without an
+            * alpha channel.
+            */
+         desc[0] = 0;
+         desc[1] = S_008F04_STRIDE(16);
+         desc[2] = 0;
+         desc[3] = rsrc_word3;
+      } else {
+         memset(desc, 0, 4 * 4);
       }
 
-      if (!vbo_info.va) {
+      return;
+   }
+
+   const unsigned stride = vbo_info.stride;
+   uint32_t num_records = vbo_info.size;
+
+   if (vs->info.vs.use_per_attribute_vb_descs) {
+      const uint32_t attrib_end = vbo_info.attrib_offset + vbo_info.attrib_format_size;
+
+      if (num_records < attrib_end) {
+         num_records = 0; /* not enough space for one vertex */
+      } else if (stride == 0) {
+         num_records = 1; /* only one vertex */
+      } else {
+         num_records = (num_records - attrib_end) / stride + 1;
+         /* If attrib_offset>stride, then the compiler will increase the vertex index by
+            * attrib_offset/stride and decrease the offset by attrib_offset%stride. This is
+            * only allowed with static strides.
+            */
+         num_records += vbo_info.attrib_index_offset;
+      }
+
+      /* GFX10 uses OOB_SELECT_RAW if stride==0, so convert num_records from elements into
+         * into bytes in that case. GFX8 always uses bytes.
+         */
+      if (num_records && (chip == GFX8 || (chip != GFX9 && !stride))) {
+         num_records = (num_records - 1) * stride + attrib_end;
+      } else if (!num_records) {
+         /* On GFX9, it seems bounds checking is disabled if both
+            * num_records and stride are zero. This doesn't seem necessary on GFX8, GFX10 and
+            * GFX10.3 but it doesn't hurt.
+            */
          if (uses_dynamic_inputs) {
-            /* Stride needs to be non-zero on GFX9, or else bounds checking is disabled. We need
-             * to include the format/word3 so that the alpha channel is 1 for formats without an
-             * alpha channel.
-             */
             desc[0] = 0;
             desc[1] = S_008F04_STRIDE(16);
             desc[2] = 0;
             desc[3] = rsrc_word3;
          } else {
-            memset(desc, 0, 4 * 4);
+            memset(desc, 0, 16);
          }
 
-         continue;
+         return;
       }
+   } else {
+      if (chip != GFX8 && stride)
+         num_records = DIV_ROUND_UP(num_records, stride);
+   }
 
-      const unsigned stride = vbo_info.stride;
-      uint32_t num_records = vbo_info.size;
+   if (chip >= GFX10) {
+      /* OOB_SELECT chooses the out-of-bounds check:
+         * - 1: index >= NUM_RECORDS (Structured)
+         * - 3: offset >= NUM_RECORDS (Raw)
+         */
+      int oob_select = stride ? V_008F0C_OOB_SELECT_STRUCTURED : V_008F0C_OOB_SELECT_RAW;
+      rsrc_word3 |= S_008F0C_OOB_SELECT(oob_select) | S_008F0C_RESOURCE_LEVEL(chip < GFX11);
+   }
 
-      if (vs->info.vs.use_per_attribute_vb_descs) {
-         const uint32_t attrib_end = vbo_info.attrib_offset + vbo_info.attrib_format_size;
+   uint64_t va = vbo_info.va;
+   if (uses_dynamic_inputs)
+      va += vbo_info.attrib_offset;
 
-         if (num_records < attrib_end) {
-            num_records = 0; /* not enough space for one vertex */
-         } else if (stride == 0) {
-            num_records = 1; /* only one vertex */
-         } else {
-            num_records = (num_records - attrib_end) / stride + 1;
-            /* If attrib_offset>stride, then the compiler will increase the vertex index by
-             * attrib_offset/stride and decrease the offset by attrib_offset%stride. This is
-             * only allowed with static strides.
-             */
-            num_records += vbo_info.attrib_index_offset;
-         }
+   desc[0] = va;
+   desc[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) | S_008F04_STRIDE(stride);
+   desc[2] = num_records;
+   desc[3] = rsrc_word3;
+}
 
-         /* GFX10 uses OOB_SELECT_RAW if stride==0, so convert num_records from elements into
-          * into bytes in that case. GFX8 always uses bytes.
-          */
-         if (num_records && (chip == GFX8 || (chip != GFX9 && !stride))) {
-            num_records = (num_records - 1) * stride + attrib_end;
-         } else if (!num_records) {
-            /* On GFX9, it seems bounds checking is disabled if both
-             * num_records and stride are zero. This doesn't seem necessary on GFX8, GFX10 and
-             * GFX10.3 but it doesn't hurt.
-             */
-            if (uses_dynamic_inputs) {
-               desc[0] = 0;
-               desc[1] = S_008F04_STRIDE(16);
-               desc[2] = 0;
-               desc[3] = rsrc_word3;
-            } else {
-               memset(desc, 0, 16);
-            }
-
-            continue;
-         }
-      } else {
-         if (chip != GFX8 && stride)
-            num_records = DIV_ROUND_UP(num_records, stride);
-      }
-
-      if (chip >= GFX10) {
-         /* OOB_SELECT chooses the out-of-bounds check:
-          * - 1: index >= NUM_RECORDS (Structured)
-          * - 3: offset >= NUM_RECORDS (Raw)
-          */
-         int oob_select = stride ? V_008F0C_OOB_SELECT_STRUCTURED : V_008F0C_OOB_SELECT_RAW;
-         rsrc_word3 |= S_008F0C_OOB_SELECT(oob_select) | S_008F0C_RESOURCE_LEVEL(chip < GFX11);
-      }
-
-      uint64_t va = vbo_info.va;
-      if (uses_dynamic_inputs)
-         va += vbo_info.attrib_offset;
-
-      desc[0] = va;
-      desc[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) | S_008F04_STRIDE(stride);
-      desc[2] = num_records;
-      desc[3] = rsrc_word3;
+ALWAYS_INLINE static void
+radv_write_vertex_descriptors_dynamic(const struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *vs, void *vb_ptr)
+{
+   unsigned desc_index = 0;
+   for (unsigned i = 0; i < vs->info.vs.num_attributes; i++) {
+      uint32_t *desc = &((uint32_t *)vb_ptr)[desc_index++ * 4];
+      radv_write_vertex_descriptor(cmd_buffer, vs, i, true, desc);
    }
 }
 
-static void
+ALWAYS_INLINE static void
+radv_write_vertex_descriptors(const struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *vs, void *vb_ptr)
+{
+   unsigned desc_index = 0;
+   u_foreach_bit(i, vs->info.vs.vb_desc_usage_mask) {
+      uint32_t *desc = &((uint32_t *)vb_ptr)[desc_index++ * 4];
+      radv_write_vertex_descriptor(cmd_buffer, vs, i, false, desc);
+   }
+}
+
+ALWAYS_INLINE static void
 radv_flush_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_shader *vs = radv_get_shader(cmd_buffer->state.shaders, MESA_SHADER_VERTEX);
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   bool uses_dynamic_inputs = vs->info.vs.dynamic_inputs;
 
    if (!vs->info.vs.vb_desc_usage_mask)
       return;
@@ -5964,7 +5958,7 @@ radv_flush_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer)
    /* Mesh shaders don't have vertex descriptors. */
    assert(!cmd_buffer->state.mesh_shading);
 
-   unsigned vb_desc_alloc_size = util_bitcount(vs->info.vs.vb_desc_usage_mask) * 16;
+   unsigned vb_desc_alloc_size = (uses_dynamic_inputs ? vs->info.vs.num_attributes : util_bitcount(vs->info.vs.vb_desc_usage_mask)) * 16;
    unsigned vb_offset;
    void *vb_ptr;
    uint64_t va;
@@ -5973,7 +5967,10 @@ radv_flush_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer)
    if (!radv_cmd_buffer_upload_alloc(cmd_buffer, vb_desc_alloc_size, &vb_offset, &vb_ptr))
       return;
 
-   radv_write_vertex_descriptors(cmd_buffer, vs, vb_ptr);
+   if (uses_dynamic_inputs)
+      radv_write_vertex_descriptors_dynamic(cmd_buffer, vs, vb_ptr);
+   else
+      radv_write_vertex_descriptors(cmd_buffer, vs, vb_ptr);
 
    va = radv_buffer_get_va(cmd_buffer->upload.upload_bo);
    va += vb_offset;
@@ -6997,14 +6994,14 @@ radv_CmdBindVertexBuffers2(VkCommandBuffer commandBuffer, uint32_t firstBinding,
       }
    }
 
-   if (misaligned_mask_invalid) {
+   if (misaligned_mask_invalid != cmd_buffer->state.vbo_misaligned_mask_invalid) {
       cmd_buffer->state.vbo_misaligned_mask_invalid = misaligned_mask_invalid;
       cmd_buffer->state.vbo_misaligned_mask &= ~misaligned_mask_invalid;
       cmd_buffer->state.vbo_unaligned_mask &= ~misaligned_mask_invalid;
+      cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_VERTEX_INPUT;
    }
 
    cmd_buffer->state.dirty |= RADV_CMD_DIRTY_VERTEX_BUFFER;
-   cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_VERTEX_INPUT;
 }
 
 static uint32_t
@@ -7501,6 +7498,9 @@ radv_bind_pre_rast_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_
 static void
 radv_bind_vertex_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_shader *vs)
 {
+   struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   const struct radv_physical_device *pdev = radv_device_physical(device);
+
    radv_bind_pre_rast_shader(cmd_buffer, vs);
 
    /* Re-emit states that need to be updated when the vertex shader is compiled separately
@@ -7510,6 +7510,9 @@ radv_bind_vertex_shader(struct radv_cmd_buffer *cmd_buffer, const struct radv_sh
       cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_PATCH_CONTROL_POINTS;
    }
 
+   cmd_buffer->state.can_use_simple_vertex_input = !vs->info.merged_shader_compiled_separately &&
+                                                   vs->info.is_ngg == pdev->use_ngg &&
+                                                   vs->info.wave_size == pdev->ge_wave_size;
    /* Can't put anything else here due to merged shaders */
 }
 
@@ -7666,6 +7669,9 @@ radv_bind_shader(struct radv_cmd_buffer *cmd_buffer, struct radv_shader *shader,
 
       /* Reset some dynamic states when a shader stage is unbound. */
       switch (stage) {
+      case MESA_SHADER_VERTEX:
+         cmd_buffer->state.can_use_simple_vertex_input = false;
+         break;
       case MESA_SHADER_FRAGMENT:
          cmd_buffer->state.dirty |= RADV_CMD_DIRTY_DB_SHADER_CONTROL;
          cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_CONSERVATIVE_RAST_MODE | RADV_DYNAMIC_RASTERIZATION_SAMPLES |
@@ -8149,6 +8155,11 @@ radv_CmdSetPrimitiveTopology(VkCommandBuffer commandBuffer, VkPrimitiveTopology 
        radv_prim_is_points_or_lines(primitive_topology))
       state->dirty |= RADV_CMD_DIRTY_GUARDBAND;
 
+   /* for line stipple/mode */
+   if (radv_prim_is_lines(state->dynamic.vk.ia.primitive_topology) !=
+       radv_prim_is_lines(primitive_topology))
+      state->dirty |= RADV_DYNAMIC_RASTERIZATION_SAMPLES;
+
    state->dynamic.vk.ia.primitive_topology = primitive_topology;
 
    state->dirty_dynamic |= RADV_DYNAMIC_PRIMITIVE_TOPOLOGY;
@@ -8407,8 +8418,19 @@ radv_CmdSetVertexInputEXT(VkCommandBuffer commandBuffer, uint32_t vertexBindingD
       if (G_008F0C_DST_SEL_X(vtx_info->dst_sel) == V_008F0C_SQ_SEL_Z)
          vi_state->post_shuffle |= BITFIELD_BIT(loc);
 
-      if (!(vtx_info->has_hw_format & BITFIELD_BIT(vtx_info->num_channels - 1)))
+      if (vtx_info->has_hw_format & BITFIELD_BIT(vtx_info->num_channels - 1)) {
+         const uint32_t hw_format = vtx_info->hw_format[vtx_info->num_channels - 1];
+
+         if (pdev->info.gfx_level >= GFX10) {
+            vi_state->non_trivial_format[loc] = vtx_info->dst_sel | S_008F0C_FORMAT_GFX10(hw_format);
+         } else {
+            vi_state->non_trivial_format[loc] =
+               vtx_info->dst_sel | S_008F0C_NUM_FORMAT((hw_format >> 4) & 0x7) | S_008F0C_DATA_FORMAT(hw_format & 0xf);
+         }
+      } else {
+         vi_state->non_trivial_format[loc] = 0;
          vi_state->nontrivial_formats |= BITFIELD_BIT(loc);
+      }
 
       if (state->vbo_bound_mask & BITFIELD_BIT(attrib->binding)) {
          uint32_t stride = binding->stride;
