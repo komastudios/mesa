@@ -24,6 +24,11 @@ variables:
     VISIBILITY_GROUP: "Collabora+fdo"
     STORAGE_MAINLINE_HOST_PATH: "${BASE_SYSTEM_HOST_PREFIX}/${FDO_UPSTREAM_REPO}/${DATA_STORAGE_PATH}"
     STORAGE_FORK_HOST_PATH: "${BASE_SYSTEM_HOST_PREFIX}/${CI_PROJECT_PATH}/${DATA_STORAGE_PATH}"
+  rules:
+    - changes:
+        - .gitlab-ci/lava/**/*  # when there are changes in the lava scripts, all the lava jobs needs to test them
+      when:
+        on_success
   before_script:
     - !reference [.download_s3, before_script]
   script:
