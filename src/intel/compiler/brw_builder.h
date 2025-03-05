@@ -411,7 +411,7 @@ public:
    brw_reg
    move_to_vgrf(const brw_reg &src, unsigned num_components) const
    {
-      brw_reg *const src_comps = new brw_reg[num_components];
+      brw_reg *const src_comps = rzalloc_array(NULL, brw_reg, num_components);
 
       for (unsigned i = 0; i < num_components; i++)
          src_comps[i] = offset(src, *this, i);
@@ -419,7 +419,7 @@ public:
       const brw_reg dst = vgrf(src.type, num_components);
       LOAD_PAYLOAD(dst, src_comps, num_components, 0);
 
-      delete[] src_comps;
+      ralloc_free(src_comps);
 
       return brw_reg(dst);
    }
@@ -784,7 +784,7 @@ public:
        */
       brw_reg vec4_result = vgrf(BRW_TYPE_F, 4);
 
-      brw_reg srcs[PULL_VARYING_CONSTANT_SRCS];
+      brw_reg srcs[PULL_VARYING_CONSTANT_SRCS] = {};
       srcs[PULL_VARYING_CONSTANT_SRC_SURFACE]        = surface;
       srcs[PULL_VARYING_CONSTANT_SRC_SURFACE_HANDLE] = surface_handle;
       srcs[PULL_VARYING_CONSTANT_SRC_OFFSET]         = total_offset;

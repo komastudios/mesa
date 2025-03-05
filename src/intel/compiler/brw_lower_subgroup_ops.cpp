@@ -49,7 +49,7 @@ brw_get_reduction_info(brw_reduce_op red_op, brw_reg_type type)
       break;
    }
 
-   brw_reg id;
+   brw_reg id = {};
    const unsigned size = brw_type_size_bytes(type);
 
    switch (red_op) {
@@ -125,9 +125,8 @@ brw_emit_scan_step(const brw_builder &bld, enum opcode opcode, brw_conditional_m
                    unsigned left_offset, unsigned left_stride,
                    unsigned right_offset, unsigned right_stride)
 {
-   brw_reg left, right;
-   left = horiz_stride(horiz_offset(tmp, left_offset), left_stride);
-   right = horiz_stride(horiz_offset(tmp, right_offset), right_stride);
+   brw_reg left = horiz_stride(horiz_offset(tmp, left_offset), left_stride);
+   brw_reg right = horiz_stride(horiz_offset(tmp, right_offset), right_stride);
    if ((tmp.type == BRW_TYPE_Q || tmp.type == BRW_TYPE_UQ) &&
        (!bld.shader->devinfo->has_64bit_int || bld.shader->devinfo->ver >= 20)) {
       switch (opcode) {

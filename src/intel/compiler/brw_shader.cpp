@@ -36,6 +36,13 @@
 #include "compiler/glsl_types.h"
 #include "compiler/nir/nir_builder.h"
 #include "util/u_math.h"
+#include <string.h>
+
+static bool
+brw_is_valid_output(const brw_shader &s, int varying)
+{
+   return varying != BRW_VARYING_SLOT_PAD && s.outputs[varying].file != BAD_FILE;
+}
 
 void
 brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
@@ -48,8 +55,8 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
       VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT | VARYING_BIT_PSIZ | VARYING_BIT_PRIMITIVE_SHADING_RATE;
    const struct intel_vue_map *vue_map = &vue_prog_data->vue_map;
    bool flush;
-   brw_reg sources[8];
-   brw_reg urb_handle;
+   brw_reg sources[8] = {};
+   brw_reg urb_handle = {};
 
    switch (stage) {
    case MESA_SHADER_VERTEX:
@@ -67,7 +74,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
 
    const brw_builder bld = brw_builder(this).at_end();
 
-   brw_reg per_slot_offsets;
+   brw_reg per_slot_offsets = {};
 
    if (stage == MESA_SHADER_GEOMETRY) {
       const struct brw_gs_prog_data *gs_prog_data =
@@ -112,8 +119,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
     */
    int last_slot = vue_map->num_slots - 1;
    while (last_slot > 0 &&
-          (vue_map->slot_to_varying[last_slot] == BRW_VARYING_SLOT_PAD ||
-           outputs[vue_map->slot_to_varying[last_slot]].file == BAD_FILE)) {
+          !brw_is_valid_output(*this, vue_map->slot_to_varying[last_slot])) {
       last_slot--;
    }
 
@@ -138,7 +144,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
          bld.MOV(zero, brw_imm_ud(0u));
 
          if (vue_map->slots_valid & VARYING_BIT_PRIMITIVE_SHADING_RATE &&
-             this->outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE].file != BAD_FILE) {
+             brw_is_valid_output(*this, VARYING_SLOT_PRIMITIVE_SHADING_RATE)) {
             sources[length++] = this->outputs[VARYING_SLOT_PRIMITIVE_SHADING_RATE];
          } else if (devinfo->has_coarse_pixel_primitive_and_cb) {
             uint32_t one_fp16 = 0x3C00;
@@ -150,17 +156,20 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
             sources[length++] = zero;
          }
 
-         if (vue_map->slots_valid & VARYING_BIT_LAYER)
+         if (vue_map->slots_valid & VARYING_BIT_LAYER &&
+             brw_is_valid_output(*this, VARYING_SLOT_LAYER))
             sources[length++] = this->outputs[VARYING_SLOT_LAYER];
          else
             sources[length++] = zero;
 
-         if (vue_map->slots_valid & VARYING_BIT_VIEWPORT)
+         if (vue_map->slots_valid & VARYING_BIT_VIEWPORT &&
+             brw_is_valid_output(*this, VARYING_SLOT_VIEWPORT))
             sources[length++] = this->outputs[VARYING_SLOT_VIEWPORT];
          else
             sources[length++] = zero;
 
-         if (vue_map->slots_valid & VARYING_BIT_PSIZ)
+         if (vue_map->slots_valid & VARYING_BIT_PSIZ &&
+             brw_is_valid_output(*this, VARYING_SLOT_PSIZ))
             sources[length++] = this->outputs[VARYING_SLOT_PSIZ];
          else
             sources[length++] = zero;
@@ -179,8 +188,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
           * slot for writing we flush a mlen 5 urb write, otherwise we just
           * advance the urb_offset.
           */
-         if (varying == BRW_VARYING_SLOT_PAD ||
-             this->outputs[varying].file == BAD_FILE) {
+         if (!brw_is_valid_output(*this, varying)) {
             if (length > 0)
                flush = true;
             else
@@ -206,13 +214,13 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
       const brw_builder abld = bld.annotate("URB write");
 
       /* If we've queued up 8 registers of payload (2 VUE slots), if this is
-       * the last slot or if we need to flush (see BAD_FILE varying case
+       * the last slot or if we need to flush (see invalid output varying case
        * above), emit a URB write send now to flush out the data.
        */
       if (length == 8 || (length > 0 && slot == last_slot))
          flush = true;
       if (flush) {
-         brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+         brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
 
          srcs[URB_LOGICAL_SRC_HANDLE] = urb_handle;
          srcs[URB_LOGICAL_SRC_PER_SLOT_OFFSETS] = per_slot_offsets;
@@ -263,7 +271,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
 
       bld.exec_all().MOV(uniform_urb_handle, urb_handle);
 
-      brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+      brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
       srcs[URB_LOGICAL_SRC_HANDLE] = uniform_urb_handle;
       srcs[URB_LOGICAL_SRC_DATA] = payload;
       srcs[URB_LOGICAL_SRC_COMPONENTS] = brw_imm_ud(1);
@@ -314,7 +322,7 @@ brw_shader::emit_urb_writes(const brw_reg &gs_vertex_count)
       bld.exec_all().MOV(offset(payload, bld, 2), brw_imm_ud(0u));
       bld.exec_all().MOV(offset(payload, bld, 3), brw_imm_ud(0u));
 
-      brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+      brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
       srcs[URB_LOGICAL_SRC_HANDLE] = uniform_urb_handle;
       srcs[URB_LOGICAL_SRC_CHANNEL_MASK] = uniform_mask;
       srcs[URB_LOGICAL_SRC_DATA] = payload;
@@ -357,7 +365,7 @@ brw_shader::emit_cs_terminate()
       brw_imm_ud(desc), /* desc */
       brw_imm_ud(0), /* ex_desc */
       payload,       /* payload */
-      brw_reg(),      /* payload2 */
+      {},            /* payload2 */
    };
 
    brw_inst *send = ubld.emit(SHADER_OPCODE_SEND, reg_undef, srcs, 4);
@@ -431,9 +439,11 @@ brw_shader::init()
    this->failed = false;
    this->fail_msg = NULL;
 
-   this->payload_ = NULL;
+   memset(&this->payload_, 0, sizeof(this->payload_));
+
    this->source_depth_to_render_target = false;
    this->first_non_payload_grf = 0;
+   this->num_payload_regs = 0;
 
    this->uniforms = 0;
    this->last_scratch = 0;
@@ -453,11 +463,6 @@ brw_shader::init()
 
    this->gs.control_data_bits_per_vertex = 0;
    this->gs.control_data_header_size_bits = 0;
-}
-
-brw_shader::~brw_shader()
-{
-   delete this->payload_;
 }
 
 void
@@ -598,6 +603,15 @@ round_components_to_whole_registers(const intel_device_info *devinfo,
    return DIV_ROUND_UP(c, 8 * reg_unit(devinfo)) * reg_unit(devinfo);
 }
 
+static brw_reg
+brw_get_inline_parameter(brw_shader &s)
+{
+   if (gl_shader_stage_is_rt(s.stage))      return s.bs_payload().inline_parameter;
+   if (gl_shader_stage_is_compute(s.stage)) return s.cs_payload().inline_parameter;
+   if (gl_shader_stage_is_mesh(s.stage))    return s.task_mesh_payload().inline_parameter;
+  unreachable("invalid stage");
+}
+
 void
 brw_shader::assign_curb_setup()
 {
@@ -642,10 +656,7 @@ brw_shader::assign_curb_setup()
          /* The address of the push constants is at offset 0 in the inline
           * parameter.
           */
-         base_addr =
-            gl_shader_stage_is_rt(stage) ?
-            retype(bs_payload().inline_parameter, BRW_TYPE_UQ) :
-            retype(cs_payload().inline_parameter, BRW_TYPE_UQ);
+         base_addr = retype(brw_get_inline_parameter(*this), BRW_TYPE_UQ);
       } else {
          /* The base offset for our push data is passed in as R0.0[31:6]. We
           * have to mask off the bottom 6 bits.
@@ -693,10 +704,10 @@ brw_shader::assign_curb_setup()
             brw_imm_ud(0), /* desc */
             brw_imm_ud(0), /* ex_desc */
             addr,          /* payload */
-            brw_reg(),      /* payload2 */
+            {},            /* payload2 */
          };
 
-         brw_reg dest = retype(brw_vec8_grf(payload().num_regs + i, 0),
+         brw_reg dest = retype(brw_vec8_grf(num_payload_regs + i, 0),
                               BRW_TYPE_UD);
          brw_inst *send = ubld.emit(SHADER_OPCODE_SEND, dest, srcs, 4);
 
@@ -715,8 +726,8 @@ brw_shader::assign_curb_setup()
             LSC_ADDR_SIZE_A64 : LSC_ADDR_SIZE_A32, 1);
          send->size_written =
             lsc_msg_dest_len(devinfo, LSC_DATA_SIZE_D32, num_regs * 8) * REG_SIZE;
-         assert((payload().num_regs + i + send->size_written / REG_SIZE) <=
-                (payload().num_regs + prog_data->curb_read_length));
+         assert((num_payload_regs + i + send->size_written / REG_SIZE) <=
+                (num_payload_regs + prog_data->curb_read_length));
          send->send_is_volatile = true;
 
          send->src[0] = brw_imm_ud(desc |
@@ -755,7 +766,7 @@ brw_shader::assign_curb_setup()
             assert(constant_nr / 8 < 64);
             used |= BITFIELD64_BIT(constant_nr / 8);
 
-	    struct brw_reg brw_reg = brw_vec1_grf(payload().num_regs +
+	    struct brw_reg brw_reg = brw_vec1_grf(num_payload_regs +
 						  constant_nr / 8,
 						  constant_nr % 8);
             brw_reg.abs = inst->src[i].abs;
@@ -780,10 +791,10 @@ brw_shader::assign_curb_setup()
 
       /* push_reg_mask_param is in 32-bit units */
       unsigned mask_param = prog_data->push_reg_mask_param;
-      struct brw_reg mask = brw_vec1_grf(payload().num_regs + mask_param / 8,
+      struct brw_reg mask = brw_vec1_grf(num_payload_regs + mask_param / 8,
                                                               mask_param % 8);
 
-      brw_reg b32;
+      brw_reg b32 = {};
       for (unsigned i = 0; i < 64; i++) {
          if (i % 16 == 0 && (want_zero & BITFIELD64_RANGE(i, 16))) {
             brw_reg shifted = ubld.vgrf(BRW_TYPE_W, 2);
@@ -800,7 +811,7 @@ brw_shader::assign_curb_setup()
          if (want_zero & BITFIELD64_BIT(i)) {
             assert(i < prog_data->curb_read_length);
             struct brw_reg push_reg =
-               retype(brw_vec8_grf(payload().num_regs + i, 0), BRW_TYPE_D);
+               retype(brw_vec8_grf(num_payload_regs + i, 0), BRW_TYPE_D);
 
             ubld.AND(push_reg, push_reg, component(b32, i % 16));
          }
@@ -810,7 +821,7 @@ brw_shader::assign_curb_setup()
    }
 
    /* This may be updated in assign_urb_setup or assign_vs_urb_setup. */
-   this->first_non_payload_grf = payload().num_regs + prog_data->curb_read_length;
+   this->first_non_payload_grf = num_payload_regs + prog_data->curb_read_length;
 }
 
 /*
@@ -843,7 +854,7 @@ brw_shader::convert_attr_sources_to_hw_regs(brw_inst *inst)
    for (int i = 0; i < inst->sources; i++) {
       if (inst->src[i].file == ATTR) {
          assert(inst->src[i].nr == 0);
-         int grf = payload().num_regs +
+         int grf = num_payload_regs +
                    prog_data->curb_read_length +
                    inst->src[i].offset / REG_SIZE;
 

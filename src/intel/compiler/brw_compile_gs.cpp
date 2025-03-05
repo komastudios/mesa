@@ -50,13 +50,13 @@ brw_emit_gs_thread_end(brw_shader &s)
       if (s.mark_last_urb_write_with_eot())
          return;
 
-      brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+      brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
       srcs[URB_LOGICAL_SRC_HANDLE] = s.gs_payload().urb_handles;
       srcs[URB_LOGICAL_SRC_COMPONENTS] = brw_imm_ud(0);
       inst = abld.emit(SHADER_OPCODE_URB_WRITE_LOGICAL, reg_undef,
                        srcs, ARRAY_SIZE(srcs));
    } else {
-      brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+      brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
       srcs[URB_LOGICAL_SRC_HANDLE] = s.gs_payload().urb_handles;
       srcs[URB_LOGICAL_SRC_DATA] = s.final_gs_vertex_count;
       srcs[URB_LOGICAL_SRC_COMPONENTS] = brw_imm_ud(1);
@@ -88,7 +88,7 @@ run_gs(brw_shader &s)
 {
    assert(s.stage == MESA_SHADER_GEOMETRY);
 
-   s.payload_ = new brw_gs_thread_payload(s);
+   brw_setup_gs_payload(s);
 
    const brw_builder bld = brw_builder(&s).at_end();
 
@@ -355,9 +355,9 @@ brw_compile_gs(const struct brw_compiler *compiler,
    if (run_gs(v)) {
       prog_data->base.dispatch_mode = INTEL_DISPATCH_MODE_SIMD8;
 
-      assert(v.payload().num_regs % reg_unit(compiler->devinfo) == 0);
+      assert(v.num_payload_regs % reg_unit(compiler->devinfo) == 0);
       prog_data->base.base.dispatch_grf_start_reg =
-         v.payload().num_regs / reg_unit(compiler->devinfo);
+         v.num_payload_regs / reg_unit(compiler->devinfo);
       prog_data->base.base.grf_used = v.grf_used;
 
       brw_generator g(compiler, &params->base,

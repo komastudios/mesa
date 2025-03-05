@@ -80,7 +80,6 @@ public:
               bool needs_register_pressure,
               bool debug_enabled);
    void init();
-   ~brw_shader();
 
    void import_uniforms(brw_shader *v);
 
@@ -95,7 +94,7 @@ public:
    void fail(const char *msg, ...);
    void limit_dispatch_width(unsigned n, const char *msg);
 
-   void emit_urb_writes(const brw_reg &gs_vertex_count = brw_reg());
+   void emit_urb_writes(const brw_reg &gs_vertex_count = {});
    void emit_gs_control_data_bits(const brw_reg &vertex_count);
    brw_reg gs_urb_channel_mask(const brw_reg &dword_index);
    brw_reg gs_urb_per_slot_dword_index(const brw_reg &vertex_count);
@@ -146,12 +145,15 @@ public:
    /** Byte-offset for the next available spot in the scratch space buffer. */
    unsigned last_scratch;
 
-   brw_reg frag_depth;
-   brw_reg frag_stencil;
-   brw_reg sample_mask;
-   brw_reg outputs[VARYING_SLOT_MAX];
-   brw_reg dual_src_output;
+   brw_reg frag_depth = {};
+   brw_reg frag_stencil = {};
+   brw_reg sample_mask = {};
+   brw_reg outputs[VARYING_SLOT_MAX] = {};
+   brw_reg dual_src_output = {};
    int first_non_payload_grf;
+
+   /** The number of thread payload registers the hardware will supply. */
+   unsigned num_payload_regs;
 
    enum brw_shader_phase phase;
 
@@ -159,42 +161,51 @@ public:
    char *fail_msg;
 
    /* Use the vs_payload(), fs_payload(), etc. to access the right payload. */
-   brw_thread_payload *payload_;
+   union {
+      brw_vs_thread_payload vs;
+      brw_tcs_thread_payload tcs;
+      brw_tes_thread_payload tes;
+      brw_gs_thread_payload gs;
+      brw_fs_thread_payload fs;
+      brw_cs_thread_payload cs;
+      brw_task_mesh_thread_payload task_mesh;
+      brw_bs_thread_payload bs;
+   } payload_;
 
-#define DEFINE_PAYLOAD_ACCESSOR(TYPE, NAME, ASSERTION)   \
-   TYPE &NAME() {                                        \
-      assert(ASSERTION);                                 \
-      return *static_cast<TYPE *>(this->payload_);       \
-   }                                                     \
-   const TYPE &NAME() const {                            \
-      assert(ASSERTION);                                 \
-      return *static_cast<const TYPE *>(this->payload_); \
+
+#define DEFINE_PAYLOAD_ACCESSOR(TYPE, NAME, FIELD, ASSERTION)   \
+   TYPE &NAME() {                                               \
+      assert(ASSERTION);                                        \
+      return this->payload_.FIELD;                              \
+   }                                                            \
+   const TYPE &NAME() const {                                   \
+      assert(ASSERTION);                                        \
+      return this->payload_.FIELD;                              \
    }
 
-   DEFINE_PAYLOAD_ACCESSOR(brw_thread_payload,     payload,     true);
-   DEFINE_PAYLOAD_ACCESSOR(brw_vs_thread_payload,  vs_payload,  stage == MESA_SHADER_VERTEX);
-   DEFINE_PAYLOAD_ACCESSOR(brw_tcs_thread_payload, tcs_payload, stage == MESA_SHADER_TESS_CTRL);
-   DEFINE_PAYLOAD_ACCESSOR(brw_tes_thread_payload, tes_payload, stage == MESA_SHADER_TESS_EVAL);
-   DEFINE_PAYLOAD_ACCESSOR(brw_gs_thread_payload,  gs_payload,  stage == MESA_SHADER_GEOMETRY);
-   DEFINE_PAYLOAD_ACCESSOR(brw_fs_thread_payload,  fs_payload,  stage == MESA_SHADER_FRAGMENT);
-   DEFINE_PAYLOAD_ACCESSOR(brw_cs_thread_payload,  cs_payload,
-                           gl_shader_stage_uses_workgroup(stage));
-   DEFINE_PAYLOAD_ACCESSOR(brw_task_mesh_thread_payload, task_mesh_payload,
+   DEFINE_PAYLOAD_ACCESSOR(brw_vs_thread_payload,  vs_payload,  vs,  stage == MESA_SHADER_VERTEX);
+   DEFINE_PAYLOAD_ACCESSOR(brw_tcs_thread_payload, tcs_payload, tcs, stage == MESA_SHADER_TESS_CTRL);
+   DEFINE_PAYLOAD_ACCESSOR(brw_tes_thread_payload, tes_payload, tes, stage == MESA_SHADER_TESS_EVAL);
+   DEFINE_PAYLOAD_ACCESSOR(brw_gs_thread_payload,  gs_payload,  gs,  stage == MESA_SHADER_GEOMETRY);
+   DEFINE_PAYLOAD_ACCESSOR(brw_fs_thread_payload,  fs_payload,  fs,  stage == MESA_SHADER_FRAGMENT);
+   DEFINE_PAYLOAD_ACCESSOR(brw_cs_thread_payload,  cs_payload,  cs,
+                           gl_shader_stage_is_compute(stage));
+   DEFINE_PAYLOAD_ACCESSOR(brw_task_mesh_thread_payload, task_mesh_payload, task_mesh,
                            stage == MESA_SHADER_TASK || stage == MESA_SHADER_MESH);
-   DEFINE_PAYLOAD_ACCESSOR(brw_bs_thread_payload, bs_payload,
+   DEFINE_PAYLOAD_ACCESSOR(brw_bs_thread_payload, bs_payload, bs,
                            stage >= MESA_SHADER_RAYGEN && stage <= MESA_SHADER_CALLABLE);
 
    bool source_depth_to_render_target;
 
-   brw_reg pixel_x;
-   brw_reg pixel_y;
-   brw_reg pixel_z;
-   brw_reg wpos_w;
-   brw_reg pixel_w;
-   brw_reg delta_xy[INTEL_BARYCENTRIC_MODE_COUNT];
-   brw_reg final_gs_vertex_count;
-   brw_reg control_data_bits;
-   brw_reg invocation_id;
+   brw_reg pixel_x = {};
+   brw_reg pixel_y = {};
+   brw_reg pixel_z = {};
+   brw_reg wpos_w = {};
+   brw_reg pixel_w = {};
+   brw_reg delta_xy[INTEL_BARYCENTRIC_MODE_COUNT] = {};
+   brw_reg final_gs_vertex_count = {};
+   brw_reg control_data_bits = {};
+   brw_reg invocation_id = {};
 
    struct {
       unsigned control_data_bits_per_vertex;
@@ -257,6 +268,15 @@ void brw_compute_urb_setup_index(struct brw_wm_prog_data *wm_prog_data);
 
 int brw_get_subgroup_id_param_index(const intel_device_info *devinfo,
                                     const brw_stage_prog_data *prog_data);
+
+void brw_setup_vs_payload(brw_shader &s);
+void brw_setup_tcs_payload(brw_shader &s);
+void brw_setup_tes_payload(brw_shader &s);
+void brw_setup_gs_payload(brw_shader &s);
+void brw_setup_fs_payload(brw_shader &s);
+void brw_setup_cs_payload(brw_shader &s);
+void brw_setup_task_mesh_payload(brw_shader &s);
+void brw_setup_bs_payload(brw_shader &s);
 
 void brw_from_nir(brw_shader *s);
 

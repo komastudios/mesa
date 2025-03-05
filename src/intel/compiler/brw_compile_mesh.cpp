@@ -319,7 +319,7 @@ run_task_mesh(brw_shader &s, bool allow_spilling)
    assert(s.stage == MESA_SHADER_TASK ||
           s.stage == MESA_SHADER_MESH);
 
-   s.payload_ = new brw_task_mesh_thread_payload(s);
+   brw_setup_task_mesh_payload(s);
 
    brw_from_nir(&s);
 

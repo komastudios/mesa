@@ -104,7 +104,7 @@ brw_emit_tcs_thread_end(brw_shader &s)
     * algorithm to set it optimally).  On other platforms, we simply write
     * zero to a reserved/MBZ patch header DWord which has no consequence.
     */
-   brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+   brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
    srcs[URB_LOGICAL_SRC_HANDLE] = s.tcs_payload().patch_urb_output;
    srcs[URB_LOGICAL_SRC_CHANNEL_MASK] = brw_imm_ud(WRITEMASK_X << 16);
    srcs[URB_LOGICAL_SRC_DATA] = brw_imm_ud(0);
@@ -136,7 +136,7 @@ run_tcs(brw_shader &s)
    assert(vue_prog_data->dispatch_mode == INTEL_DISPATCH_MODE_TCS_SINGLE_PATCH ||
           vue_prog_data->dispatch_mode == INTEL_DISPATCH_MODE_TCS_MULTI_PATCH);
 
-   s.payload_ = new brw_tcs_thread_payload(s);
+   brw_setup_tcs_payload(s);
 
    /* Initialize gl_InvocationID */
    brw_set_tcs_invocation_id(s);
@@ -281,8 +281,8 @@ brw_compile_tcs(const struct brw_compiler *compiler,
       return NULL;
    }
 
-   assert(v.payload().num_regs % reg_unit(devinfo) == 0);
-   prog_data->base.base.dispatch_grf_start_reg = v.payload().num_regs / reg_unit(devinfo);
+   assert(v.num_payload_regs % reg_unit(devinfo) == 0);
+   prog_data->base.base.dispatch_grf_start_reg = v.num_payload_regs / reg_unit(devinfo);
    prog_data->base.base.grf_used = v.grf_used;
 
    brw_generator g(compiler, &params->base,
