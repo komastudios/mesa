@@ -16,6 +16,8 @@
 #include "panvk_macros.h"
 #include "panvk_mempool.h"
 
+#include "vk_graphics_state.h"
+
 struct panvk_cmd_buffer;
 
 #ifdef PAN_ARCH
