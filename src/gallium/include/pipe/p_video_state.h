@@ -521,6 +521,35 @@ struct pipe_enc_roi
    struct pipe_enc_region_in_roi region[PIPE_ENC_ROI_REGION_NUM_MAX];
 };
 
+/* qp_map_mode, PIPE_ENC_QPMAP_ABSOLUTE only valid in CQP
+ * mode, because in this case, RC has been done externally. */
+enum pipe_enc_qp_map_mode
+{
+   PIPE_ENC_QPMAP_NONE  = 0x0,
+   PIPE_ENC_QPMAP_DELTA = 0x1,
+   PIPE_ENC_QPMAP_ABSOLUTE = 0x2,
+};
+
+/* qp_map is a way of rate control from applications, while
+ * DELTA mode is trying to use the current RC/CQP mode with
+ * adjustments base on current QP value. Absolute mode is not
+ * using RC mode, only valid on CQP mode, and doing the adjustment
+ * entirely from exteranl. Absolute mode can be used in a case which
+ * sets CQP mode in VCN and actually doing exteranl rate control.
+ * The assumption is for async operations since the feedback could
+ * come back in several frames, its reaction time might needs to
+ * consider the delay of these frames.
+ *
+ * the size and buffer should be always available, otherwise
+ * it won't perform QP_MAP operations. */
+
+struct pipe_enc_qp_map
+{
+   enum pipe_enc_qp_map_mode mode;
+   uint32_t size;
+   uint8_t *buffer;
+};
+
 struct pipe_enc_raw_header
 {
    uint8_t type; /* nal_unit_type or obu_type */
@@ -802,6 +831,7 @@ struct pipe_h264_enc_picture_desc
    struct pipe_enc_quality_modes quality_modes;
    struct pipe_enc_intra_refresh intra_refresh;
    struct pipe_enc_roi roi;
+   struct pipe_enc_qp_map qp_map;
 
    bool not_referenced;
    bool is_ltr;
@@ -1185,6 +1215,7 @@ struct pipe_h265_enc_picture_desc
    struct pipe_enc_quality_modes quality_modes;
    struct pipe_enc_intra_refresh intra_refresh;
    struct pipe_enc_roi roi;
+   struct pipe_enc_qp_map qp_map;
    unsigned num_ref_idx_l0_active_minus1;
    unsigned num_ref_idx_l1_active_minus1;
    unsigned ref_idx_l0_list[PIPE_H265_MAX_NUM_LIST_REF];
@@ -1364,6 +1395,7 @@ struct pipe_av1_enc_picture_desc
    struct pipe_enc_quality_modes quality_modes;
    struct pipe_enc_intra_refresh intra_refresh;
    struct pipe_enc_roi roi;
+   struct pipe_enc_qp_map qp_map;
    uint32_t tile_rows;
    uint32_t tile_cols;
    unsigned num_tile_groups;
@@ -2424,6 +2456,39 @@ union pipe_enc_cap_surface_alignment {
       uint32_t reserved                             : 24;
    } bits;
    uint32_t value;
+};
+
+union pipe_enc_cap_qp_map {
+    struct {
+        /* \brief QP map mode, there are two options: 1 - delta QP and
+         * 2 - absolute QP. When \ref qp_map_mode is 1, each element
+         * represents a delta value; for each block,
+         * the final QP = current QP + delta_QP, with delta_QP being a
+         * signed number. If \ref log2_qp_map_unit_size_in_bytes is 2,
+         * then each element utilizes 4 bytes. On the other hand,
+         * if \ref qp_map_mode is 2, absolute QP values are used, the
+         * final QP = QP. This is only valid when
+         * qp_map_mode & (VA_ENC_QP_MAP_MODE_DELTA | VA_ENC_QP_MAP_MODE_ABSOLUTE)
+         * is valid. The absolute mode can only be applied in CQP mode because
+         * it bypasses RC QP adjustments. */
+        uint32_t qp_map_mode                : 2;
+        /** \brief supported size of qp map block, for h264, each block
+         * (16x16) has one QP, \ref log2_block_size = 4, if HEVC/AV1,
+         * and each 64x64 has a QP, \ref log2_block_size = 6*/
+        uint32_t log2_block_size            : 4;
+        /* \brief The size of each QP map element per block is denoted in bytes,
+         * such as 1 byte per QP map element, making \ref unit_size_in_bytes
+         * equal to 1. If there are 4 bytes per QP map element, \ref unit_size_in_bytes
+         * equals 4. Please note that \ref unit_size_in_bytes cannot be 0. All QP
+         * map units should be considered signed numbers: for 4 bytes,
+         * interpret them as an int32_t number; for 2 bytes, as an int16_t
+         * number; and for 1 byte, as an int8_t number, which represents the
+         * unit QP(QI). */
+        uint32_t unit_size_in_bytes         : 3;
+        /** \brief reserved bit for future, must be zero */
+        uint32_t reserved                   : 23;
+    } bits;
+    uint32_t value;
 };
 
 /* To be used with PIPE_VIDEO_CAP_ENC_HEVC_RANGE_EXTENSION_SUPPORT */
