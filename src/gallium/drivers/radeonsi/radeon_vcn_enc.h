@@ -56,6 +56,22 @@
       fprintf(stderr, "EE %s:%d %s VCN - " fmt, __FILE__, __LINE__, __func__, ##args);           \
    } while(0)
 
+/* mapped av1 qi into the legacy qp range by dividing by 5 and
+ * rounding up in any rate control mode.
+ */
+#define RADEON_ENC_ESTIMATE_QI(out, in, type)                                                    \
+   do {                                                                                          \
+      if ((type) == RENCODE_QP_MAP_TYPE_MAP_PA) {                                                \
+         if ((in) > 0 )                                                                          \
+            (out) = ((in) + 2) / 5;                                                              \
+         else if ((in) < 0 )                                                                     \
+            (out) = ((in) - 2) / 5;                                                              \
+         else                                                                                    \
+            (out) = 0;                                                                           \
+      } else                                                                                     \
+         (out) = (in);                                                                           \
+   } while (0)
+
 typedef void (*radeon_enc_get_buffer)(struct pipe_resource *resource, struct pb_buffer_lean **handle,
                                       struct radeon_surf **surface);
 
