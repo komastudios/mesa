@@ -2903,10 +2903,14 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
       break;
 
    case nir_op_frexp_exp:
+      /* v11 removed FREXPE.v2f16 */
+      assert(src_sz == 32 || (b->shader->arch < 11 && src_sz == 16));
       bi_frexpe_to(b, sz, dst, s0, false, false);
       break;
 
    case nir_op_frexp_sig:
+      /* v11 removed FREXPM.v2f16 */
+      assert(src_sz == 32 || (b->shader->arch < 11 && src_sz == 16));
       bi_frexpm_to(b, sz, dst, s0, false, false);
       break;
 
@@ -4892,6 +4896,8 @@ bi_lower_bit_size(const nir_instr *instr, void *data)
    case nir_op_fceil:
    case nir_op_ffloor:
    case nir_op_ftrunc:
+   case nir_op_frexp_sig:
+   case nir_op_frexp_exp:
       if (pan_arch(gpu_id) < 11)
          return 0;
       /* On v11+, FROUND.v2s16 is gone */
@@ -4937,6 +4943,8 @@ bi_vectorize_filter(const nir_instr *instr, const void *data)
    case nir_op_f2f16_rtne:
    case nir_op_u2f16:
    case nir_op_i2f16:
+   case nir_op_frexp_sig:
+   case nir_op_frexp_exp:
       if (pan_arch(gpu_id) >= 11)
          return 1;
 
@@ -5152,6 +5160,9 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
     * KHR-GLES31.core.shader_image_load_store.basic-allTargets-atomicFS */
    NIR_PASS(progress, nir, nir_lower_int64);
 
+   /* Algebraic can materialize instructions with a bit_size that we need to lower */
+   NIR_PASS(progress, nir, nir_lower_bit_size, bi_lower_bit_size, &gpu_id);
+
    /* We need to cleanup after each iteration of late algebraic
     * optimizations, since otherwise NIR can produce weird edge cases
     * (like fneg of a constant) which we don't handle */
@@ -5174,8 +5185,13 @@ bi_optimize_nir(nir_shader *nir, unsigned gpu_id, bool is_blend)
    NIR_PASS(progress, nir, nir_lower_bool_to_bitsize);
 
    /* Prepass to simplify instruction selection */
-   late_algebraic = false;
-   NIR_PASS(late_algebraic, nir, bifrost_nir_lower_algebraic_late, pan_arch(gpu_id));
+   bool late_algebraic_progress = true;
+   while (late_algebraic_progress) {
+      late_algebraic_progress = false;
+      NIR_PASS(late_algebraic_progress, nir, bifrost_nir_lower_algebraic_late,
+               pan_arch(gpu_id));
+      late_algebraic |= late_algebraic_progress;
+   }
 
    while (late_algebraic) {
       late_algebraic = false;
