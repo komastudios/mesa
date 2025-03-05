@@ -278,9 +278,11 @@ compile_image_function(struct llvmpipe_context *ctx, struct lp_static_texture_st
    if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS && !lp_storage_render_image_format_supported(texture->format))
       return NULL;
 
-   bool ms = op >= LP_TOTAL_IMAGE_OP_COUNT / 2;
-   if (ms)
-      op -= LP_TOTAL_IMAGE_OP_COUNT / 2;
+   uint32_t flags = op / LP_IMAGE_OP_COUNT;
+   op = op % LP_IMAGE_OP_COUNT;
+
+   bool ms = flags & LP_IMAGE_OP_MS;
+   bool is64 = flags & LP_IMAGE_OP_64;
 
    struct lp_img_params params = { 0 };
 
@@ -333,7 +335,7 @@ compile_image_function(struct llvmpipe_context *ctx, struct lp_static_texture_st
    params.resources_type = cs.jit_resources_type;
    params.format = texture->format;
 
-   LLVMTypeRef function_type = lp_build_image_function_type(gallivm, &params, ms);
+   LLVMTypeRef function_type = lp_build_image_function_type(gallivm, &params, ms, is64);
    if (!function_type) {
       free(image_soa);
       gallivm_destroy(gallivm);
@@ -518,6 +520,10 @@ compile_sample_function(struct llvmpipe_context *ctx, struct lp_static_texture_s
    if (lod_control == LP_SAMPLER_LOD_BIAS || lod_control == LP_SAMPLER_LOD_EXPLICIT)
       lod = LLVMGetParam(function, arg_index++);
 
+   LLVMValueRef min_lod = NULL;
+   if (sample_key & LP_SAMPLER_MIN_LOD)
+      min_lod = LLVMGetParam(function, arg_index++);
+
    LLVMBuilderRef old_builder = gallivm->builder;
    LLVMBasicBlockRef block = LLVMAppendBasicBlockInContext(gallivm->context, function, "entry");
    gallivm->builder = LLVMCreateBuilderInContext(gallivm->context);
@@ -527,7 +533,7 @@ compile_sample_function(struct llvmpipe_context *ctx, struct lp_static_texture_s
    if (supported) {
       lp_build_sample_soa_code(gallivm, texture, sampler, lp_build_sampler_soa_dynamic_state(sampler_soa),
                                type, sample_key, 0, 0, cs.jit_resources_type, NULL, cs.jit_cs_thread_data_type,
-                               NULL, coords, offsets, NULL, lod, ms_index, texel_out);
+                               NULL, coords, offsets, NULL, lod, min_lod, ms_index, texel_out);
    } else {
       lp_build_sample_nop(gallivm, lp_build_texel_type(type, util_format_description(texture->format)), coords, texel_out);
    }
@@ -1027,23 +1033,9 @@ register_instr(nir_builder *b, nir_instr *instr, void *data)
    } else if (instr->type == nir_instr_type_intrinsic) {
       nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
 
-      struct lp_img_params params;
-      lp_img_op_from_intrinsic(&params, intrin);
-
-      if (params.img_op == -1)
-         return false;
-
-      uint32_t op = params.img_op;
-      if (op == LP_IMG_ATOMIC_CAS)
-         op--;
-      else if (op == LP_IMG_ATOMIC)
-         op = params.op + (LP_IMG_OP_COUNT - 1);
-
-      if (nir_intrinsic_image_dim(intrin) == GLSL_SAMPLER_DIM_MS ||
-          nir_intrinsic_image_dim(intrin) == GLSL_SAMPLER_DIM_SUBPASS_MS)
-         op += LP_TOTAL_IMAGE_OP_COUNT / 2;
-
-      register_image_op(ctx, op);
+      uint32_t op = lp_packed_img_op_from_intrinsic(intrin);
+      if (op != -1)
+         register_image_op(ctx, op);
    }
 
    return false;
