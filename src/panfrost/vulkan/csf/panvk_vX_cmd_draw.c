@@ -1324,6 +1324,8 @@ prepare_ds(struct panvk_cmd_buffer *cmdbuf)
    bool test_s = has_stencil_att(cmdbuf) && ds->stencil.test_enable;
    bool test_z = has_depth_att(cmdbuf) && ds->depth.test_enable;
    const struct panvk_shader *fs = get_fs(cmdbuf);
+   bool fs_reads_zs = fs && fs->fs.zs_attachment_read;
+   bool write_zs = writes_depth(cmdbuf) || writes_stencil(cmdbuf);
 
    struct panfrost_ptr zsd = panvk_cmd_alloc_desc(cmdbuf, DEPTH_STENCIL);
    if (!zsd.gpu)
@@ -1517,6 +1519,12 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
             struct pan_earlyzs_state earlyzs =
                pan_earlyzs_get(pan_earlyzs_analyze(&fs->info), writes_zs || oq,
                                alpha_to_coverage, zs_always_passes);
+
+	    printf("%s:%i reads_zs %d writes_zs %d\n", __func__, __LINE__, fs->fs.zs_attachment_read, writes_zs);
+	    if (fs->fs.zs_attachment_read && !writes_zs && earlyzs.kill != PAN_EARLYZS_FORCE_LATE && earlyzs.update != PAN_EARLYZS_FORCE_LATE) {
+               earlyzs.kill = PAN_EARLYZS_FORCE_LATE;
+               earlyzs.update = PAN_EARLYZS_FORCE_LATE;
+            }
 
             cfg.pixel_kill_operation = (enum mali_pixel_kill)earlyzs.kill;
             cfg.zs_update_operation = (enum mali_pixel_kill)earlyzs.update;
