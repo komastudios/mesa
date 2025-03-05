@@ -219,11 +219,10 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
       &cmdbuf->vk.dynamic_graphics_state;
    const struct vk_rasterization_state *rs = &dyns->rs;
    const struct vk_color_blend_state *cb = &dyns->cb;
-   const struct vk_color_attachment_location_state *cal = &dyns->cal;
    const struct vk_depth_stencil_state *ds = &dyns->ds;
    const struct panvk_shader *fs = get_fs(cmdbuf);
    const struct pan_shader_info *fs_info = fs ? &fs->info : NULL;
-   uint32_t bd_count = panvk_blend_desc_count(cb, cal);
+   uint32_t bd_count = MAX2(cb->attachment_count, 1);
    bool test_s = has_stencil_att(cmdbuf) && ds->stencil.test_enable;
    bool test_z = has_depth_att(cmdbuf) && ds->depth.test_enable;
    bool writes_z = writes_depth(cmdbuf);

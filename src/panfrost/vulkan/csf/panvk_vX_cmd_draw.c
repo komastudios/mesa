@@ -450,8 +450,7 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
    const struct vk_dynamic_graphics_state *dyns =
       &cmdbuf->vk.dynamic_graphics_state;
    const struct vk_color_blend_state *cb = &dyns->cb;
-   const struct vk_color_attachment_location_state *cal = &dyns->cal;
-   uint32_t bd_count = panvk_blend_desc_count(cb, cal);
+   uint32_t bd_count = MAX2(cb->attachment_count, 1);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
    struct panfrost_ptr ptr =

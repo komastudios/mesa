@@ -334,7 +334,7 @@ panvk_per_arch(blend_emit_descs)(struct panvk_cmd_buffer *cmdbuf,
       MESA_VK_ATTACHMENT_UNUSED, MESA_VK_ATTACHMENT_UNUSED,
       MESA_VK_ATTACHMENT_UNUSED, MESA_VK_ATTACHMENT_UNUSED,
    };
-   uint32_t blend_count = panvk_blend_desc_count(cb, cal);
+   uint32_t blend_count = MAX2(cb->attachment_count, 1);
 
    static_assert(ARRAY_SIZE(remap_catts) <= ARRAY_SIZE(cal->color_map),
                  "vk_color_attachment_location_state::color_map is too small");
