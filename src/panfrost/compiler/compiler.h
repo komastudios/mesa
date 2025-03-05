@@ -149,8 +149,16 @@ typedef struct {
    uint32_t offset         : 3;
    enum bi_index_type type : 3;
 
+   /* Last use of an SSA value; similar to discard, but applies to the
+    * SSA analysis and does not have any HW restrictions (discard gets
+    * sent to the hardware eventually. */
+   bool kill_ssa : 1;
+
+   /* Register class */
+   bool memory : 1;
+
    /* Must be zeroed so we can hash the whole 64-bits at a time */
-   unsigned padding : (32 - 13);
+   unsigned padding : (32 - 15);
 } bi_index;
 
 static inline bi_index
@@ -161,6 +169,23 @@ bi_get_index(unsigned value)
       .swizzle = BI_SWIZZLE_H01,
       .type = BI_INDEX_NORMAL,
    };
+}
+
+enum ra_class {
+   /* General purpose register */
+   RA_GPR,
+
+   /* Memory, used to assign stack slots */
+   RA_MEM,
+
+   /* Keep last */
+   RA_CLASSES,
+};
+
+static inline enum ra_class
+ra_class_for_index(bi_index idx)
+{
+   return idx.memory ? RA_MEM : RA_GPR;
 }
 
 static inline bi_index
@@ -899,6 +924,15 @@ typedef struct {
     */
    struct hash_table_u64 *allocated_vec;
 
+   /* Beginning of our stack allocation used for spilling, below that is
+    * NIR-level scratch.
+    */
+   unsigned spill_base_B;
+
+   /* Beginning of stack allocation used for parallel copy lowering */
+   bool has_spill_pcopy_reserved;
+   unsigned spill_pcopy_base;
+
    /* Stats for shader-db */
    unsigned loop_count;
    unsigned spills;
@@ -1087,6 +1121,21 @@ bi_src_index(nir_src *src)
    bi_foreach_instr_in_tuple(tuple, ins)                                       \
       bi_foreach_src(ins, s)
 
+/* Phis only come at the start (after else instructions) so we stop as soon as
+ * we hit a non-phi
+ */
+#define bi_foreach_phi_in_block(block, v)                                      \
+   bi_foreach_instr_in_block(block, v)                                        \
+      if (v->op != BI_OPCODE_PHI)                                              \
+         break;                                                                \
+      else
+
+#define bi_foreach_phi_in_block_safe(block, v)                                 \
+   bi_foreach_instr_in_block_safe(block, v)                                    \
+      if (v->op != AGX_OPCODE_PHI)                                             \
+         break;                                                                \
+      else
+
 /*
  * Find the index of a predecessor, used as the implicit order of phi sources.
  */
@@ -1208,6 +1257,8 @@ bool bi_opt_constant_fold(bi_context *ctx);
 
 void bi_compute_liveness_ssa(bi_context *ctx);
 void bi_liveness_ins_update_ssa(BITSET_WORD *live, const bi_instr *ins);
+
+unsigned bi_calc_register_demand(bi_context *ctx);
 
 void bi_postra_liveness(bi_context *ctx);
 uint64_t MUST_CHECK bi_postra_liveness_ins(uint64_t live, bi_instr *ins);

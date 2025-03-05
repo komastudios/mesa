@@ -22,6 +22,7 @@ libpanfrost_bifrost_files = files(
   'bi_opt_dual_tex.c',
   'bi_pressure_schedule.c',
   'bi_ra.c',
+  'bi_ra_ssa.c',
   'bi_validate.c',
   'bir.c',
   'bifrost_compile.c',
