@@ -95,7 +95,7 @@ public:
    void fail(const char *msg, ...);
    void limit_dispatch_width(unsigned n, const char *msg);
 
-   void emit_urb_writes(const brw_reg &gs_vertex_count = brw_reg());
+   void emit_urb_writes(const brw_reg &gs_vertex_count = {});
    void emit_gs_control_data_bits(const brw_reg &vertex_count);
    brw_reg gs_urb_channel_mask(const brw_reg &dword_index);
    brw_reg gs_urb_per_slot_dword_index(const brw_reg &vertex_count);
@@ -146,11 +146,11 @@ public:
    /** Byte-offset for the next available spot in the scratch space buffer. */
    unsigned last_scratch;
 
-   brw_reg frag_depth;
-   brw_reg frag_stencil;
-   brw_reg sample_mask;
-   brw_reg outputs[VARYING_SLOT_MAX];
-   brw_reg dual_src_output;
+   brw_reg frag_depth = {};
+   brw_reg frag_stencil = {};
+   brw_reg sample_mask = {};
+   brw_reg outputs[VARYING_SLOT_MAX] = {};
+   brw_reg dual_src_output = {};
    int first_non_payload_grf;
 
    enum brw_shader_phase phase;
@@ -186,15 +186,15 @@ public:
 
    bool source_depth_to_render_target;
 
-   brw_reg pixel_x;
-   brw_reg pixel_y;
-   brw_reg pixel_z;
-   brw_reg wpos_w;
-   brw_reg pixel_w;
-   brw_reg delta_xy[INTEL_BARYCENTRIC_MODE_COUNT];
-   brw_reg final_gs_vertex_count;
-   brw_reg control_data_bits;
-   brw_reg invocation_id;
+   brw_reg pixel_x = {};
+   brw_reg pixel_y = {};
+   brw_reg pixel_z = {};
+   brw_reg wpos_w = {};
+   brw_reg pixel_w = {};
+   brw_reg delta_xy[INTEL_BARYCENTRIC_MODE_COUNT] = {};
+   brw_reg final_gs_vertex_count = {};
+   brw_reg control_data_bits = {};
+   brw_reg invocation_id = {};
 
    struct {
       unsigned control_data_bits_per_vertex;

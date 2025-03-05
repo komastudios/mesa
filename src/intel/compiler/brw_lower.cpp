@@ -303,7 +303,7 @@ brw_lower_barycentrics(brw_shader &s)
       case BRW_OPCODE_PLN: {
          assert(inst->exec_size == 16);
          const brw_reg tmp = ibld.vgrf(inst->src[1].type, 2);
-         brw_reg srcs[4];
+         brw_reg srcs[4] = {};
 
          for (unsigned i = 0; i < ARRAY_SIZE(srcs); i++)
             srcs[i] = horiz_offset(offset(inst->src[1], ibld, i % 2),
@@ -675,7 +675,7 @@ brw_lower_vgrf_to_fixed_grf(const struct intel_device_info *devinfo, brw_inst *i
    if (reg->file != VGRF)
       return;
 
-   struct brw_reg new_reg;
+   struct brw_reg new_reg = {};
 
    if (reg->stride == 0) {
       new_reg = brw_vec1_grf(reg->nr, 0);

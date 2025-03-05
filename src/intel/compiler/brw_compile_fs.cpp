@@ -28,7 +28,7 @@ brw_emit_single_fb_write(brw_shader &s, const brw_builder &bld,
    assert(s.stage == MESA_SHADER_FRAGMENT);
    struct brw_wm_prog_data *prog_data = brw_wm_prog_data(s.prog_data);
 
-   brw_reg sources[FB_WRITE_LOGICAL_NUM_SRCS];
+   brw_reg sources[FB_WRITE_LOGICAL_NUM_SRCS] = {};
    sources[FB_WRITE_LOGICAL_SRC_COLOR0]     = color0;
    sources[FB_WRITE_LOGICAL_SRC_COLOR1]     = color1;
    sources[FB_WRITE_LOGICAL_SRC_SRC0_ALPHA] = src0_alpha;
@@ -44,7 +44,7 @@ brw_emit_single_fb_write(brw_shader &s, const brw_builder &bld,
    if (s.nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_STENCIL))
       sources[FB_WRITE_LOGICAL_SRC_SRC_STENCIL] = s.frag_stencil;
 
-   brw_inst *write = bld.emit(FS_OPCODE_FB_WRITE_LOGICAL, brw_reg(),
+   brw_inst *write = bld.emit(FS_OPCODE_FB_WRITE_LOGICAL, {},
                              sources, ARRAY_SIZE(sources));
 
    if (prog_data->uses_kill) {
@@ -69,7 +69,7 @@ brw_do_emit_fb_writes(brw_shader &s, int nr_color_regions, bool replicate_alpha)
       const brw_builder abld = bld.annotate(
          ralloc_asprintf(s.mem_ctx, "FB write target %d", target));
 
-      brw_reg src0_alpha;
+      brw_reg src0_alpha = {};
       if (replicate_alpha && target != 0)
          src0_alpha = offset(s.outputs[0], bld, 3);
 
@@ -97,8 +97,10 @@ brw_do_emit_fb_writes(brw_shader &s, int nr_color_regions, bool replicate_alpha)
       /* FINISHME: Factor out this frequently recurring pattern into a
        * helper function.
        */
+      const brw_reg alpha = s.outputs[0].file != BAD_FILE ?
+         offset(s.outputs[0], bld, 3) : reg_undef;
       const brw_reg srcs[] = { reg_undef, reg_undef,
-                              reg_undef, offset(s.outputs[0], bld, 3) };
+                               reg_undef, alpha };
       const brw_reg tmp = bld.vgrf(BRW_TYPE_UD, 4);
       bld.LOAD_PAYLOAD(tmp, srcs, 4, 0);
 
@@ -189,9 +191,9 @@ brw_emit_interpolation_setup(brw_shader &s)
    struct brw_wm_prog_data *wm_prog_data = brw_wm_prog_data(s.prog_data);
    brw_fs_thread_payload &payload = s.fs_payload();
 
-   brw_reg int_sample_offset_x, int_sample_offset_y; /* Used on Gen12HP+ */
-   brw_reg int_sample_offset_xy; /* Used on Gen8+ */
-   brw_reg half_int_sample_offset_x, half_int_sample_offset_y;
+   brw_reg int_sample_offset_x = {}, int_sample_offset_y = {}; /* Used on Gen12HP+ */
+   brw_reg int_sample_offset_xy = {}; /* Used on Gen8+ */
+   brw_reg half_int_sample_offset_x = {}, half_int_sample_offset_y = {};
    if (wm_prog_data->coarse_pixel_dispatch != INTEL_ALWAYS) {
       /* The thread payload only delivers subspan locations (ss0, ss1,
        * ss2, ...). Since subspans covers 2x2 pixels blocks, we need to
@@ -238,9 +240,9 @@ brw_emit_interpolation_setup(brw_shader &s)
       int_sample_offset_y = brw_reg(brw_imm_v(0x01010000));
    }
 
-   brw_reg int_coarse_offset_x, int_coarse_offset_y; /* Used on Gen12HP+ */
-   brw_reg int_coarse_offset_xy; /* Used on Gen8+ */
-   brw_reg half_int_coarse_offset_x, half_int_coarse_offset_y;
+   brw_reg int_coarse_offset_x = {}, int_coarse_offset_y = {}; /* Used on Gen12HP+ */
+   brw_reg int_coarse_offset_xy = {}; /* Used on Gen8+ */
+   brw_reg half_int_coarse_offset_x = {}, half_int_coarse_offset_y = {};
    if (wm_prog_data->coarse_pixel_dispatch != INTEL_NEVER) {
       /* In coarse pixel dispatch we have to do the same ADD instruction that
        * we do in normal per pixel dispatch, except this time we're not adding
@@ -287,9 +289,9 @@ brw_emit_interpolation_setup(brw_shader &s)
       bld.SHR(half_int_coarse_offset_y, suboffset(r1_0, 1), brw_imm_ud(1));
    }
 
-   brw_reg int_pixel_offset_x, int_pixel_offset_y; /* Used on Gen12HP+ */
-   brw_reg int_pixel_offset_xy; /* Used on Gen8+ */
-   brw_reg half_int_pixel_offset_x, half_int_pixel_offset_y;
+   brw_reg int_pixel_offset_x = {}, int_pixel_offset_y = {}; /* Used on Gen12HP+ */
+   brw_reg int_pixel_offset_xy = {}; /* Used on Gen8+ */
+   brw_reg half_int_pixel_offset_x = {}, half_int_pixel_offset_y = {};
    switch (wm_prog_data->coarse_pixel_dispatch) {
    case INTEL_NEVER:
       int_pixel_offset_x = int_sample_offset_x;
@@ -413,7 +415,7 @@ brw_emit_interpolation_setup(brw_shader &s)
    }
 
    abld = bld.annotate("compute pos.z");
-   brw_reg coarse_z;
+   brw_reg coarse_z = {};
    if (wm_prog_data->coarse_pixel_dispatch != INTEL_NEVER &&
        wm_prog_data->uses_depth_w_coefficients) {
       /* In coarse pixel mode, the HW doesn't interpolate Z coordinate
@@ -1334,7 +1336,7 @@ brw_assign_urb_setup(brw_shader &s)
              * in bytes.
              */
             const unsigned chan_sz = 4;
-            struct brw_reg reg;
+            struct brw_reg reg = {};
             assert(s.max_polygons > 0);
 
             /* Calculate the base register on the thread payload of

@@ -66,6 +66,8 @@ brw_tcs_thread_payload::brw_tcs_thread_payload(const brw_shader &v)
       if (tcs_prog_data->include_primitive_id) {
          primitive_id = brw_vec8_grf(r, 0);
          r += reg_unit(v.devinfo);
+      } else {
+         primitive_id = {};
       }
 
       /* ICP handles occupy the next 1-32 registers. */
@@ -121,6 +123,8 @@ brw_gs_thread_payload::brw_gs_thread_payload(brw_shader &v)
    if (gs_prog_data->include_primitive_id) {
       primitive_id = brw_ud8_grf(r, 0);
       r += reg_unit(v.devinfo);
+   } else {
+      primitive_id = {};
    }
 
    /* Always enable VUE handles so we can safely use pull model if needed.
@@ -353,6 +357,9 @@ brw_fs_thread_payload::brw_fs_thread_payload(const brw_shader &v,
 }
 
 brw_cs_thread_payload::brw_cs_thread_payload(const brw_shader &v)
+   : local_invocation_id(),
+     inline_parameter(),
+     subgroup_id_()
 {
    struct brw_cs_prog_data *prog_data = brw_cs_prog_data(v.prog_data);
 
@@ -458,6 +465,8 @@ brw_task_mesh_thread_payload::brw_task_mesh_thread_payload(brw_shader &v)
        * Bit 24 says that Slice ID is present and bits 16:23 is the Slice ID.
        */
       task_urb_input = brw_ud1_grf(0, 7);
+   } else {
+      task_urb_input = {};
    }
    r += reg_unit(v.devinfo);
 

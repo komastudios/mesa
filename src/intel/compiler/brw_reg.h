@@ -207,17 +207,6 @@ typedef struct brw_reg {
    };
 
 #ifdef __cplusplus
-   /* TODO: Remove this constructor to make this type a POD.  Need
-    * to make sure that rest of compiler doesn't rely on type or
-    * stride of BAD_FILE registers.
-    */
-   brw_reg() {
-      memset((void*)this, 0, sizeof(*this));
-      this->type = BRW_TYPE_UD;
-      this->stride = 1;
-      this->file = BAD_FILE;
-   }
-
    bool equals(const brw_reg &r) const;
    bool negative_equals(const brw_reg &r) const;
    bool is_contiguous() const;
@@ -416,7 +405,7 @@ brw_make_reg(enum brw_reg_file file,
              unsigned swizzle,
              unsigned writemask)
 {
-   struct brw_reg reg;
+   struct brw_reg reg = {};
    if (file == FIXED_GRF)
       assert(nr < XE3_MAX_GRF);
    else if (file == ARF)
@@ -1513,7 +1502,9 @@ horiz_stride(brw_reg reg, unsigned s)
    return reg;
 }
 
-static const brw_reg reg_undef;
+#ifdef __cplusplus
+static const brw_reg reg_undef{ .type = BRW_TYPE_UD, .stride = 1 };
+#endif
 
 /*
  * Return the stride between channels of the specified register in

@@ -815,7 +815,7 @@ brw_reg_alloc::emit_unspill(const brw_builder &bld,
             bld.dispatch_width() > 16 * reg_unit(devinfo) ||
             bld.has_writemask_all();
          const brw_builder ubld = use_transpose ? bld.exec_all().group(1, 0) : bld;
-         brw_reg offset;
+         brw_reg offset = {};
          if (use_transpose) {
             offset = build_single_offset(ubld, spill_offset, ip);
          } else {
@@ -826,7 +826,7 @@ brw_reg_alloc::emit_unspill(const brw_builder &bld,
             brw_imm_ud(0), /* desc */
             build_ex_desc(bld, reg_size, true),
             offset,        /* payload */
-            brw_reg(),      /* payload2 */
+            {},            /* payload2 */
          };
 
          uint32_t desc = lsc_msg_desc(devinfo, LSC_OP_LOAD,

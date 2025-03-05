@@ -67,7 +67,7 @@ f16_using_mac(const brw_builder &bld, brw_inst *inst)
                   ->writes_accumulator = true;
 
             } else {
-               brw_reg result;
+               brw_reg result = {};
 
                /* As mentioned above, the MAC had an optional, explicit
                 * destination register. Various optimization passes are not

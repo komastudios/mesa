@@ -104,7 +104,7 @@ brw_emit_tcs_thread_end(brw_shader &s)
     * algorithm to set it optimally).  On other platforms, we simply write
     * zero to a reserved/MBZ patch header DWord which has no consequence.
     */
-   brw_reg srcs[URB_LOGICAL_NUM_SRCS];
+   brw_reg srcs[URB_LOGICAL_NUM_SRCS] = {};
    srcs[URB_LOGICAL_SRC_HANDLE] = s.tcs_payload().patch_urb_output;
    srcs[URB_LOGICAL_SRC_CHANNEL_MASK] = brw_imm_ud(WRITEMASK_X << 16);
    srcs[URB_LOGICAL_SRC_DATA] = brw_imm_ud(0);

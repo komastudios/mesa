@@ -626,7 +626,7 @@ TEST_F(saturate_propagation_test, intervening_dest_write)
    brw_reg src1 = bld.vgrf(BRW_TYPE_F);
    brw_reg src2 = bld.vgrf(BRW_TYPE_F, 2);
 
-   brw_reg tex_srcs[TEX_LOGICAL_NUM_SRCS];
+   brw_reg tex_srcs[TEX_LOGICAL_NUM_SRCS] = {};
    tex_srcs[TEX_LOGICAL_SRC_COORDINATE] = src2;
    tex_srcs[TEX_LOGICAL_SRC_SURFACE] = brw_imm_ud(0);
    tex_srcs[TEX_LOGICAL_SRC_COORD_COMPONENTS] = brw_imm_ud(2);
