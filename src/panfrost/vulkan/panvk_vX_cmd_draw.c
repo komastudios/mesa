@@ -12,6 +12,8 @@
 
 #include "pan_desc.h"
 
+#include "vk_render_pass.h"
+
 static void
 render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
                                   const VkRenderingAttachmentInfo *att,
@@ -44,10 +46,13 @@ render_state_set_color_attachment(struct panvk_cmd_buffer *cmdbuf,
       union pipe_color_union *col =
          (union pipe_color_union *)&att->clearValue.color;
 
+      printf("%s:%i fbinfo %p clear att %d %x %x %x %x\n", __func__, __LINE__, fbinfo, index, col->ui[0], col->ui[1], col->ui[2], col->ui[3]);
       fbinfo->rts[index].clear = true;
       pan_pack_color(phys_dev->formats.blendable,
                      fbinfo->rts[index].clear_value, col, fmt, false);
+      assert(fbinfo->rts[index].preload == false);
    } else if (att->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD) {
+      printf("%s:%i RT %d needs preload\n", __func__, __LINE__, index);
       fbinfo->rts[index].preload = true;
    }
 
@@ -220,6 +225,7 @@ panvk_per_arch(cmd_init_render_state)(struct panvk_cmd_buffer *cmdbuf,
    memset(state->render.fb.bos, 0, sizeof(state->render.fb.bos));
 #endif
 
+   state->render.fb.provoking_vertex_set = false;
    memset(state->render.fb.crc_valid, 0, sizeof(state->render.fb.crc_valid));
    memset(&state->render.color_attachments, 0,
           sizeof(state->render.color_attachments));
@@ -424,47 +430,53 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
    struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
    struct pan_fb_info *fbinfo = &state->render.fb.info;
    VkClearAttachment clear_atts[MAX_RTS + 2];
+   uint32_t color_map[MAX_RTS] = {
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+      VK_ATTACHMENT_UNUSED, VK_ATTACHMENT_UNUSED,
+   };
    uint32_t clear_att_count = 0;
 
    if (!state->render.bound_attachments)
       return;
 
+   return;
+   printf("%s:%i render_info %p\n", __func__, __LINE__, render_info);
    for (unsigned i = 0; i < fbinfo->rt_count; i++) {
       if (!fbinfo->rts[i].view)
          continue;
 
       fbinfo->rts[i].preload = true;
+      printf("%s:%i RT %d forced to preload\n", __func__, __LINE__, i);
 
-      if (fbinfo->rts[i].clear) {
-         if (render_info) {
-            const VkRenderingAttachmentInfo *att =
-               &render_info->pColorAttachments[i];
+      if (fbinfo->rts[i].clear && render_info) {
+         const VkRenderingAttachmentInfo *att =
+            &render_info->pColorAttachments[i];
 
-            clear_atts[clear_att_count++] = (VkClearAttachment){
-               .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-               .colorAttachment = i,
-               .clearValue = att->clearValue,
-            };
-         }
-         fbinfo->rts[i].clear = false;
+         printf("%s:%i draw clear att %d\n", __func__, __LINE__, i);
+         color_map[i] = i;
+         clear_atts[clear_att_count++] = (VkClearAttachment){
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .colorAttachment = i,
+            .clearValue = att->clearValue,
+         };
       }
+      fbinfo->rts[i].clear = false;
    }
 
    if (fbinfo->zs.view.zs) {
       fbinfo->zs.preload.z = true;
 
-      if (fbinfo->zs.clear.z) {
-         if (render_info) {
-            const VkRenderingAttachmentInfo *att =
-               render_info->pDepthAttachment;
+      if (fbinfo->zs.clear.z && render_info) {
+         const VkRenderingAttachmentInfo *att = render_info->pDepthAttachment;
 
-            clear_atts[clear_att_count++] = (VkClearAttachment){
-               .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-               .clearValue = att->clearValue,
-            };
-         }
-         fbinfo->zs.clear.z = false;
+         clear_atts[clear_att_count++] = (VkClearAttachment){
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .clearValue = att->clearValue,
+         };
       }
+      fbinfo->zs.clear.z = false;
    }
 
    if (fbinfo->zs.view.s ||
@@ -472,19 +484,15 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
         util_format_is_depth_and_stencil(fbinfo->zs.view.zs->format))) {
       fbinfo->zs.preload.s = true;
 
-      if (fbinfo->zs.clear.s) {
-         if (render_info) {
-            const VkRenderingAttachmentInfo *att =
-               render_info->pStencilAttachment;
+      if (fbinfo->zs.clear.s && render_info) {
+         const VkRenderingAttachmentInfo *att = render_info->pStencilAttachment;
 
-            clear_atts[clear_att_count++] = (VkClearAttachment){
-               .aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT,
-               .clearValue = att->clearValue,
-            };
-         }
-
-         fbinfo->zs.clear.s = false;
+         clear_atts[clear_att_count++] = (VkClearAttachment){
+            .aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT,
+            .clearValue = att->clearValue,
+         };
       }
+      fbinfo->zs.clear.s = false;
    }
 
 #if PAN_ARCH >= 10
@@ -508,16 +516,17 @@ panvk_per_arch(cmd_force_fb_preload)(struct panvk_cmd_buffer *cmdbuf,
                                        &dep_info);
 #endif
 
-   if (clear_att_count && render_info) {
+   if (clear_att_count && false) {
+      assert(render_info);
+
       VkClearRect clear_rect = {
          .rect = render_info->renderArea,
          .baseArrayLayer = 0,
          .layerCount = render_info->viewMask ? 1 : render_info->layerCount,
       };
 
-      panvk_per_arch(CmdClearAttachments)(panvk_cmd_buffer_to_handle(cmdbuf),
-                                          clear_att_count, clear_atts, 1,
-                                          &clear_rect);
+      panvk_per_arch(cmd_clear_attachments)(cmdbuf, color_map, clear_att_count,
+                                            clear_atts, 1, &clear_rect);
    }
 }
 
@@ -535,8 +544,88 @@ panvk_per_arch(cmd_preload_render_area_border)(
        (fbinfo->extent.maxy % 32) == 31);
 
    /* If the render area is aligned on a 32x32 section, we're good. */
-   if (!render_area_is_32x32_aligned)
+   if (!render_area_is_32x32_aligned) {
+      printf("%s:%i render_info %p\n", __func__, __LINE__, render_info);
       panvk_per_arch(cmd_force_fb_preload)(cmdbuf, render_info);
+   }
+}
+
+static void
+prepare_iam_sysvals(struct panvk_cmd_buffer *cmdbuf, BITSET_WORD *dirty_sysvals)
+{
+   const struct vk_input_attachment_location_state *ial =
+      &cmdbuf->vk.dynamic_graphics_state.ial;
+   struct panvk_input_attachment_info iam[INPUT_ATTACHMENT_MAP_SIZE];
+   uint32_t catt_count =
+      ial->color_attachment_count == MESA_VK_COLOR_ATTACHMENT_COUNT_UNKNOWN
+         ? MAX_RTS
+         : ial->color_attachment_count;
+
+   memset(iam, ~0, sizeof(iam));
+
+   assert(catt_count <= MAX_RTS);
+
+   for (uint32_t i = 0; i < catt_count; i++) {
+      if (ial->color_map[i] == MESA_VK_ATTACHMENT_UNUSED ||
+          !(cmdbuf->state.gfx.render.bound_attachments &
+            MESA_VK_RP_ATTACHMENT_COLOR_BIT(i)))
+         continue;
+
+      VkFormat fmt = cmdbuf->state.gfx.render.color_attachments.fmts[i];
+      enum pipe_format pfmt = vk_format_to_pipe_format(fmt);
+      struct mali_internal_conversion_packed conv;
+      uint32_t ia_idx = ial->color_map[i] + 1;
+      assert(ia_idx < ARRAY_SIZE(iam));
+
+      iam[ia_idx].target = PANVK_COLOR_ATTACHMENT(i);
+
+      pan_pack(&conv, INTERNAL_CONVERSION, cfg) {
+         cfg.memory_format =
+            GENX(panfrost_dithered_format_from_pipe_format)(pfmt, false);
+#if PAN_ARCH <= 7
+         cfg.register_format =
+            vk_format_is_uint(fmt)   ? MALI_REGISTER_FILE_FORMAT_U32
+            : vk_format_is_sint(fmt) ? MALI_REGISTER_FILE_FORMAT_I32
+                                     : MALI_REGISTER_FILE_FORMAT_F32;
+#endif
+      }
+
+      iam[ia_idx].conversion = conv.opaque[0];
+   }
+
+   if (ial->depth_att != MESA_VK_ATTACHMENT_UNUSED) {
+      uint32_t ia_idx =
+         ial->depth_att == MESA_VK_ATTACHMENT_NO_INDEX ? 0 : ial->depth_att + 1;
+
+      assert(ia_idx < ARRAY_SIZE(iam));
+      iam[ia_idx].target = PANVK_ZS_ATTACHMENT;
+
+#if PAN_ARCH <= 7
+      /* On v7, we need to pass the depth format around. If we use a conversion
+       * of zero, like we do on v9+, the GPU reports an INVALID_INSTR_ENC. */
+      VkFormat fmt = cmdbuf->state.gfx.render.z_attachment.fmt;
+      enum pipe_format pfmt = vk_format_to_pipe_format(fmt);
+      struct mali_internal_conversion_packed conv;
+
+      pan_pack(&conv, INTERNAL_CONVERSION, cfg) {
+         cfg.register_format = MALI_REGISTER_FILE_FORMAT_F32;
+         cfg.memory_format =
+            GENX(panfrost_dithered_format_from_pipe_format)(pfmt, false);
+      }
+      iam[ia_idx].conversion = conv.opaque[0];
+#endif
+   }
+
+   if (ial->stencil_att != MESA_VK_ATTACHMENT_UNUSED) {
+      uint32_t ia_idx =
+         ial->stencil_att == MESA_VK_ATTACHMENT_NO_INDEX ? 0 : ial->stencil_att + 1;
+
+      assert(ia_idx < ARRAY_SIZE(iam));
+      iam[ia_idx].target = PANVK_ZS_ATTACHMENT;
+   }
+
+   for (uint32_t i = 0; i < ARRAY_SIZE(iam); i++)
+      set_gfx_sysval(cmdbuf, dirty_sysvals, iam[i], iam[i]);
 }
 
 /* This value has been selected to get
@@ -646,6 +735,9 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
                         CLAMP(z_offset, 0.0f, 1.0f));
       }
    }
+
+   if (dyn_gfx_state_dirty(cmdbuf, INPUT_ATTACHMENT_MAP))
+      prepare_iam_sysvals(cmdbuf, dirty_sysvals);
 
    const struct panvk_shader *vs = cmdbuf->state.gfx.vs.shader;
 

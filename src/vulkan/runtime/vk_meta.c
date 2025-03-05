@@ -409,6 +409,7 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
    VkDevice _device = vk_device_to_handle(device);
    VkResult result;
 
+   printf("render->remap_colors %d\n", render->remap_colors);
    VkGraphicsPipelineCreateInfo info_local = *info;
 
    /* Add in the rendering info */
@@ -424,7 +425,7 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
 
    /* Assume rectangle pipelines */
    if (info_local.pInputAssemblyState == NULL)
-   info_local.pInputAssemblyState = &vk_meta_draw_rects_ia_state;
+      info_local.pInputAssemblyState = &vk_meta_draw_rects_ia_state;
 
    if (info_local.pRasterizationState == NULL)
       info_local.pRasterizationState = &default_rs_info;
@@ -458,13 +459,25 @@ vk_meta_create_graphics_pipeline(struct vk_device *device,
       info_local.pColorBlendState = &cb_info;
    }
 
+   VkRenderingAttachmentLocationInfo cal_info;
+   if (render->remap_colors) {
+      cal_info = (VkRenderingAttachmentLocationInfo){
+         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_LOCATION_INFO,
+         .pColorAttachmentLocations = render->color_map,
+         .colorAttachmentCount = render->color_attachment_count,
+      };
+      __vk_append_struct(&info_local, &cal_info);
+   }
+
    VkPipeline pipeline;
    if (meta->use_rect_list_pipeline &&
        info_local.pInputAssemblyState->topology == VK_PRIMITIVE_TOPOLOGY_META_RECT_LIST_MESA) {
+      printf("%s:%i\n", __func__, __LINE__);
       result = create_rect_list_pipeline(device, meta,
                                          &info_local,
                                          &pipeline);
    } else {
+      printf("%s:%i\n", __func__, __LINE__);
       result = disp->CreateGraphicsPipelines(_device, meta->pipeline_cache,
                                              1, &info_local,
                                              NULL, &pipeline);

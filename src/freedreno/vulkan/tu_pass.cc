@@ -72,7 +72,9 @@ tu_render_pass_add_subpass_dep(struct tu_render_pass *pass,
     * break the rearranging process.
     */
 
-   if (!vk_subpass_dependency_is_fb_local(dep, src_stage_mask, dst_stage_mask)) {
+   if (!vk_subpass_dependency_is_fb_local(dep->flags, dep->srcSubpass,
+                                          dep->dstSubpass, src_stage_mask,
+                                          dst_stage_mask)) {
       perf_debug((struct tu_device *)pass->base.device, "Disabling gmem rendering due to invalid subpass dependency");
       for (int i = 0; i < ARRAY_SIZE(pass->gmem_pixels); i++)
          pass->gmem_pixels[i] = 0;

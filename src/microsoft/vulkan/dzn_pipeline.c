@@ -1961,7 +1961,8 @@ dzn_graphics_pipeline_create(struct dzn_device *device,
 
    unsigned view_mask = 0;
    if (pass) {
-      const struct vk_subpass *subpass = &pass->subpasses[pCreateInfo->subpass];
+      const struct vk_subpass *subpass =
+         vk_render_pass_get_subpass(pass, pCreateInfo->subpass);
       color_count = subpass->color_count;
       for (uint32_t i = 0; i < subpass->color_count; i++) {
          uint32_t idx = subpass->color_attachments[i].attachment;

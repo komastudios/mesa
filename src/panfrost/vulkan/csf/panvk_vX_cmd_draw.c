@@ -441,6 +441,7 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
                 dyn_gfx_state_dirty(cmdbuf, CB_BLEND_EQUATIONS) ||
                 dyn_gfx_state_dirty(cmdbuf, CB_WRITE_MASKS) ||
                 dyn_gfx_state_dirty(cmdbuf, CB_BLEND_CONSTANTS) ||
+                dyn_gfx_state_dirty(cmdbuf, COLOR_ATTACHMENT_MAP) ||
                 fs_user_dirty(cmdbuf) || gfx_state_dirty(cmdbuf, RENDER_STATE);
 
    if (!dirty)
@@ -449,12 +450,14 @@ prepare_blend(struct panvk_cmd_buffer *cmdbuf)
    const struct vk_dynamic_graphics_state *dyns =
       &cmdbuf->vk.dynamic_graphics_state;
    const struct vk_color_blend_state *cb = &dyns->cb;
-   unsigned bd_count = MAX2(cb->attachment_count, 1);
+   uint32_t bd_count = MAX2(cb->attachment_count, 1);
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
    struct panfrost_ptr ptr =
       panvk_cmd_alloc_desc_array(cmdbuf, bd_count, BLEND);
    struct mali_blend_packed *bds = ptr.cpu;
+
+   printf("%s:%i att_count %d\n", __func__, __LINE__, cb->attachment_count);
 
    if (bd_count && !ptr.gpu)
       return VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -507,6 +510,7 @@ prepare_vp(struct panvk_cmd_buffer *cmdbuf)
          cfg.scissor_minimum_y = CLAMP(miny, 0, UINT16_MAX);
          cfg.scissor_maximum_x = CLAMP(maxx, 0, UINT16_MAX);
          cfg.scissor_maximum_y = CLAMP(maxy, 0, UINT16_MAX);
+         printf("%s:%i scissor %d,%d -> %d,%d\n", __func__, __LINE__, cfg.scissor_minimum_x, cfg.scissor_minimum_y, cfg.scissor_maximum_x, cfg.scissor_maximum_y);
       }
 
       struct mali_scissor_packed *scissor_box_ptr = &scissor_box;
@@ -1163,15 +1167,17 @@ set_provoking_vertex_mode(struct panvk_cmd_buffer *cmdbuf)
    /* If this is not the first draw, first_provoking_vertex should match
     * the one from the previous draws. Unfortunately, we can't check it
     * when the render pass is inherited. */
-   assert(!cmdbuf->state.gfx.render.fbds.gpu || inherits_render_ctx(cmdbuf) ||
+   assert(!cmdbuf->state.gfx.render.fb.provoking_vertex_set ||
           fbinfo->first_provoking_vertex == first_provoking_vertex);
 
+   cmdbuf->state.gfx.render.fb.provoking_vertex_set = true;
    fbinfo->first_provoking_vertex = first_provoking_vertex;
 }
 
 static VkResult
 get_render_ctx(struct panvk_cmd_buffer *cmdbuf)
 {
+   printf("%s:%i\n", __func__, __LINE__);
    VkResult result = get_tiler_desc(cmdbuf);
    if (result != VK_SUCCESS)
       return result;
@@ -1323,6 +1329,8 @@ prepare_ds(struct panvk_cmd_buffer *cmdbuf)
    bool test_s = has_stencil_att(cmdbuf) && ds->stencil.test_enable;
    bool test_z = has_depth_att(cmdbuf) && ds->depth.test_enable;
    const struct panvk_shader *fs = get_fs(cmdbuf);
+   bool fs_reads_zs = fs && fs->fs.zs_attachment_read;
+   bool write_zs = writes_depth(cmdbuf) || writes_stencil(cmdbuf);
 
    struct panfrost_ptr zsd = panvk_cmd_alloc_desc(cmdbuf, DEPTH_STENCIL);
    if (!zsd.gpu)
@@ -1491,18 +1499,23 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
    bool alpha_to_coverage = dyns->ms.alpha_to_coverage_enable;
    bool writes_z = writes_depth(cmdbuf);
    bool writes_s = writes_stencil(cmdbuf);
+   uint8_t rt_written =
+      color_attachment_written_mask(fs, &cmdbuf->vk.dynamic_graphics_state.cal);
+   uint8_t rt_read = color_attachment_read_mask(fs, &cmdbuf->state.gfx.sysvals);
+   uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
+                     MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
 
    if (dcd0_dirty) {
       struct mali_dcd_flags_0_packed dcd0;
       pan_pack(&dcd0, DCD_FLAGS_0, cfg) {
          if (fs) {
-            uint8_t rt_written = fs->info.outputs_written >> FRAG_RESULT_DATA0;
-            uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
-                              MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
 
             cfg.allow_forward_pixel_to_kill =
                fs->info.fs.can_fpk && !(rt_mask & ~rt_written) &&
-               !alpha_to_coverage && !cmdbuf->state.gfx.cb.info.any_dest_read;
+               !(rt_read & rt_written) && !alpha_to_coverage &&
+               !cmdbuf->state.gfx.cb.info.any_dest_read;
+            cfg.allow_forward_pixel_to_kill = false;
+            cfg.allow_forward_pixel_to_be_killed = false;
 
             bool writes_zs = writes_z || writes_s;
             bool zs_always_passes = ds_test_always_passes(cmdbuf);
@@ -1513,17 +1526,28 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
                pan_earlyzs_get(pan_earlyzs_analyze(&fs->info), writes_zs || oq,
                                alpha_to_coverage, zs_always_passes);
 
+	    printf("%s:%i reads_zs %d writes_zs %d\n", __func__, __LINE__, fs->fs.zs_attachment_read, writes_zs);
+	    if (fs->fs.zs_attachment_read && !writes_zs && earlyzs.kill != PAN_EARLYZS_FORCE_LATE && earlyzs.update != PAN_EARLYZS_FORCE_LATE) {
+               earlyzs.kill = PAN_EARLYZS_FORCE_LATE;
+               earlyzs.update = PAN_EARLYZS_FORCE_LATE;
+            }
+
             cfg.pixel_kill_operation = (enum mali_pixel_kill)earlyzs.kill;
             cfg.zs_update_operation = (enum mali_pixel_kill)earlyzs.update;
+            cfg.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_LATE;
+            cfg.zs_update_operation = MALI_PIXEL_KILL_FORCE_LATE;
             cfg.evaluate_per_sample = fs->info.fs.sample_shading &&
                                       (dyns->ms.rasterization_samples > 1);
 
             cfg.shader_modifies_coverage = fs->info.fs.writes_coverage ||
                                            fs->info.fs.can_discard ||
                                            alpha_to_coverage;
+	    cfg.primitive_barrier = true;
          } else {
             cfg.allow_forward_pixel_to_kill = true;
             cfg.allow_forward_pixel_to_be_killed = true;
+            cfg.allow_forward_pixel_to_kill = false;
+            cfg.allow_forward_pixel_to_be_killed = false;
             cfg.pixel_kill_operation = MALI_PIXEL_KILL_FORCE_EARLY;
             cfg.zs_update_operation = MALI_PIXEL_KILL_FORCE_EARLY;
             cfg.overdraw_alpha0 = true;
@@ -1543,6 +1567,7 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
          cs_move32_to(b, cs_sr_reg32(b, IDVS, DCD0), dcd0.opaque[0]);
    }
 
+   printf("%s:%i\n", __func__, __LINE__);
    if (dcd1_dirty) {
       struct mali_dcd_flags_1_packed dcd1;
       pan_pack(&dcd1, DCD_FLAGS_1, cfg) {
@@ -1555,10 +1580,22 @@ prepare_dcd(struct panvk_cmd_buffer *cmdbuf)
                (fs->info.outputs_written >> FRAG_RESULT_DATA0) &
                cmdbuf->state.gfx.render.bound_attachments;
          }
+         printf("%s:%i sample_mask %x RT_mask %x\n", __func__, __LINE__, cfg.sample_mask, cfg.render_target_mask);
       }
 
       cs_update_vt_ctx(b)
          cs_move32_to(b, cs_sr_reg32(b, IDVS, DCD1), dcd1.opaque[0]);
+   }
+
+   {
+      struct mali_dcd_flags_2_packed dcd2;
+      pan_pack(&dcd2, DCD_FLAGS_2, cfg) {
+         cfg.read_mask = rt_read & rt_mask;
+         cfg.write_mask = rt_written & rt_mask;
+      }
+
+      cs_update_vt_ctx(b)
+         cs_move32_to(b, cs_sr_reg32(b, IDVS, DCD2), dcd2.opaque[0]);
    }
 }
 
@@ -1630,6 +1667,7 @@ set_tiler_idvs_flags(struct cs_builder *b, struct panvk_cmd_buffer *cmdbuf,
 
          cfg.low_depth_cull = cfg.high_depth_cull =
             vk_rasterization_state_depth_clip_enable(rs);
+         cfg.low_depth_cull = cfg.high_depth_cull = false;
 
          cfg.secondary_shader = vs->info.vs.secondary_enable && fs != NULL;
          cfg.primitive_restart = ia->primitive_restart_enable;
@@ -1657,6 +1695,7 @@ get_tiler_flags_override(struct panvk_draw_info *draw)
 static VkResult
 prepare_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
 {
+   printf("%s:%i\n", __func__, __LINE__);
    const struct panvk_shader *vs = cmdbuf->state.gfx.vs.shader;
    const struct panvk_shader *fs = get_fs(cmdbuf);
    struct panvk_descriptor_state *desc_state = &cmdbuf->state.gfx.desc_state;
@@ -1675,6 +1714,7 @@ prepare_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
       return result;
 
    if (!inherits_render_ctx(cmdbuf)) {
+      printf("%s:%i\n", __func__, __LINE__);
       result = get_render_ctx(cmdbuf);
       if (result != VK_SUCCESS)
          return result;
@@ -1751,6 +1791,11 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
    struct cs_builder *b =
       panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_VERTEX_TILER);
    VkResult result;
+
+   if (cmdbuf->vk.subpass_idx == 4)
+      return;
+
+   printf("%s:%i subpass_idx %d\n", __func__, __LINE__, cmdbuf->vk.subpass_idx);
 
    /* If there's no vertex shader, we can skip the draw. */
    if (!panvk_priv_mem_dev_addr(vs->spds.pos_points))
@@ -1832,6 +1877,8 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_info *draw)
                         cs_shader_res_sel(0, 0, 1, 0),
                         cs_shader_res_sel(2, 2, 2, 0), cs_undef());
    }
+   cs_finish_tiling(b, false);
+   cs_wait_slots(b, SB_ALL_ITERS_MASK, false);
    cs_req_res(b, 0);
 }
 
@@ -1844,6 +1891,7 @@ panvk_per_arch(cmd_prepare_exec_cmd_for_draws)(
       return VK_SUCCESS;
 
    if (!inherits_render_ctx(primary)) {
+      printf("%s:%i\n", __func__, __LINE__);
       VkResult result  = get_render_ctx(primary);
       if (result != VK_SUCCESS)
          return result;
@@ -1859,6 +1907,7 @@ panvk_per_arch(CmdDraw)(VkCommandBuffer commandBuffer, uint32_t vertexCount,
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
 
+   printf("%s:%i\n", __func__, __LINE__);
    if (instanceCount == 0 || vertexCount == 0)
       return;
 
@@ -2144,6 +2193,7 @@ panvk_per_arch(CmdBeginRendering)(VkCommandBuffer commandBuffer,
    struct panvk_cmd_graphics_state *state = &cmdbuf->state.gfx;
    bool resuming = pRenderingInfo->flags & VK_RENDERING_RESUMING_BIT;
 
+   printf("%s:%i\n", __func__, __LINE__);
    panvk_per_arch(cmd_init_render_state)(cmdbuf, pRenderingInfo);
 
    /* If we're not resuming, the FBD should be NULL. */
@@ -2401,7 +2451,7 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
       cs_move32_to(b, layer_count, calc_enabled_layer_count(cmdbuf));
       cs_while(b, MALI_CS_CONDITION_GREATER, layer_count) {
          cs_trace_run_fragment(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
-                               false, MALI_TILE_RENDER_ORDER_Z_ORDER, false);
+                               false, MALI_TILE_RENDER_ORDER_HORIZONTAL, false);
 
          cs_add32(b, layer_count, layer_count, -1);
          cs_update_frag_ctx(b)
@@ -2410,7 +2460,7 @@ issue_fragment_jobs(struct panvk_cmd_buffer *cmdbuf)
       }
    } else {
       cs_trace_run_fragment(b, tracing_ctx, cs_scratch_reg_tuple(b, 0, 4),
-                            false, MALI_TILE_RENDER_ORDER_Z_ORDER, false);
+                            false, MALI_TILE_RENDER_ORDER_HORIZONTAL, false);
    }
    cs_req_res(b, 0);
 
@@ -2543,22 +2593,27 @@ void
 panvk_per_arch(cmd_flush_draws)(struct panvk_cmd_buffer *cmdbuf)
 {
    /* If there was no draw queued, we don't need to force a preload. */
-   if (cmdbuf->state.gfx.render.fbds.gpu || inherits_render_ctx(cmdbuf)) {
+   printf("%s:%i FBDS %lx TILER %lx inherits FB %d\n", __func__, __LINE__, cmdbuf->state.gfx.render.fbds.gpu, cmdbuf->state.gfx.render.tiler, inherits_render_ctx(cmdbuf));
+   if (cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)) {
       flush_tiling(cmdbuf);
       issue_fragment_jobs(cmdbuf);
       memset(&cmdbuf->state.gfx.render.fbds, 0,
              sizeof(cmdbuf->state.gfx.render.fbds));
       cmdbuf->state.gfx.render.tiler = 0;
 
+      printf("%s:%i\n", __func__, __LINE__);
       panvk_per_arch(cmd_force_fb_preload)(cmdbuf, NULL);
 
       /* We inherited the render context, and need to let the primary command
        * buffer know that it's changed. */
-      cmdbuf->state.gfx.render.invalidate_inherited_ctx = true;
+      cmdbuf->state.gfx.render.invalidate_inherited_ctx =
+         inherits_render_ctx(cmdbuf);
 
       /* Re-emit the FB/Tiler descs if we inherited them. */
-      if (inherits_render_ctx(cmdbuf))
+      if (inherits_render_ctx(cmdbuf)) {
+         printf("%s:%i\n", __func__, __LINE__);
          get_render_ctx(cmdbuf);
+      }
    }
 }
 
@@ -2598,6 +2653,7 @@ panvk_per_arch(CmdEndRendering)(VkCommandBuffer commandBuffer)
       /* If we're suspending the render pass and we didn't inherit the render
        * context, we need to emit it now, so it's available when the render pass
        * is resumed. */
+      printf("%s:%i\n", __func__, __LINE__);
       VkResult result = get_render_ctx(cmdbuf);
       if (result != VK_SUCCESS)
          return;
@@ -2617,4 +2673,5 @@ panvk_per_arch(CmdEndRendering)(VkCommandBuffer commandBuffer)
    /* If we're not suspending, we need to resolve attachments. */
    if (!suspending)
       panvk_per_arch(cmd_resolve_attachments)(cmdbuf);
+   printf("%s:%i\n", __func__, __LINE__);
 }

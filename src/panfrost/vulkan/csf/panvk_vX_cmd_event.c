@@ -68,8 +68,10 @@ panvk_per_arch(CmdSetEvent2)(VkCommandBuffer commandBuffer, VkEvent _event,
 
    panvk_per_arch(get_cs_deps)(cmdbuf, pDependencyInfo, &deps);
 
-   if (deps.needs_draw_flush)
+   if (deps.needs_draw_flush) {
+      printf("%s:%i\n", __func__, __LINE__);
       panvk_per_arch(cmd_flush_draws)(cmdbuf);
+   }
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
       struct cs_builder *b = panvk_get_cs_builder(cmdbuf, i);

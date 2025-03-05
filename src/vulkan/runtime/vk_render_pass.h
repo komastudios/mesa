@@ -23,6 +23,7 @@
 #ifndef VK_RENDER_PASS_H
 #define VK_RENDER_PASS_H
 
+#include "vk_limits.h"
 #include "vk_object.h"
 
 #ifdef __cplusplus
@@ -111,13 +112,19 @@ struct vk_subpass_attachment {
 };
 
 /***/
+enum vk_subpass_merged_state {
+   /** Subpass is independent */
+   VK_SUBPASS_NOT_MERGED,
+   /** Subpass is the first subpass in a group of merged subpasses */
+   VK_SUBPASS_MERGED_FIRST,
+   /** Subpass is a middle subpass in a group of merged subpasses */
+   VK_SUBPASS_MERGED_MID,
+   /** Subpass is the last subpass in a group of merged subpasses */
+   VK_SUBPASS_MERGED_LAST,
+};
+
+/***/
 struct vk_subpass {
-   /** Count of all attachments referenced by this subpass */
-   uint32_t attachment_count;
-
-   /** Array of all attachments referenced by this subpass */
-   struct vk_subpass_attachment *attachments;
-
    /** VkSubpassDescription2::inputAttachmentCount */
    uint32_t input_count;
 
@@ -171,6 +178,32 @@ struct vk_subpass {
     */
    VkAttachmentSampleCountInfoAMD sample_count_info_amd;
 
+   /** VkRenderingInputAttachmentIndexInfo for this subpass
+    *
+    * This is in the pNext chain of pipeline_info and inheritance_info.
+    *
+    * Also returned by vk_get_pipeline_rendering_ial_info() if
+    * VkGraphicsPipelineCreateInfo::renderPass != VK_NULL_HANDLE.
+    */
+   struct {
+      VkRenderingInputAttachmentIndexInfo info;
+      uint32_t colors[MESA_VK_MAX_COLOR_ATTACHMENTS];
+      uint32_t depth;
+      uint32_t stencil;
+   } ial;
+
+   /** VkRenderingAttachmentLocationInfo for this subpass
+    *
+    * This is in the pNext chain of pipeline_info and inheritance_info.
+    *
+    * Also returned by vk_get_pipeline_rendering_cal_info() if
+    * VkGraphicsPipelineCreateInfo::renderPass != VK_NULL_HANDLE.
+    */
+   struct {
+      VkRenderingAttachmentLocationInfo info;
+      uint32_t colors[MESA_VK_MAX_COLOR_ATTACHMENTS];
+   } cal;
+
    /** VkPipelineRenderingCreateInfo for this subpass
     *
     * Returned by vk_get_pipeline_rendering_create_info() if
@@ -190,7 +223,100 @@ struct vk_subpass {
 
    /** True if legacy dithering is enabled for this subpass. */
    bool legacy_dithering_enabled;
+
+   /** Merged state of this subpass.
+    *
+    * This will influence the actions taken on a CmdNextSubpass2().
+    */
+   enum vk_subpass_merged_state merged;
 };
+
+enum vk_subpass_attachment_type {
+   VK_SUBPASS_INPUT_ATTACHMENT = 0,
+   VK_SUBPASS_COLOR_ATTACHMENT,
+   VK_SUBPASS_COLOR_RESOLVE_ATTACHMENT,
+   VK_SUBPASS_DS_ATTACHMENT,
+   VK_SUBPASS_DS_RESOLVE_ATTACHMENT,
+   VK_SUBPASS_FSR_ATTACHMENT,
+   VK_SUBPASS_ATTACHMENT_TYPE_COUNT,
+};
+
+struct vk_subpass_attachment_iter {
+   struct {
+      uint32_t count;
+      struct vk_subpass_attachment *attachments;
+   } types[VK_SUBPASS_ATTACHMENT_TYPE_COUNT];
+   struct {
+      enum vk_subpass_attachment_type type;
+      uint32_t idx;
+   } cur;
+};
+
+static inline struct vk_subpass_attachment *
+vk_subpass_first_attachment(const struct vk_subpass *subpass,
+                            struct vk_subpass_attachment_iter *iter)
+{
+   *iter = (struct vk_subpass_attachment_iter){
+      .types = {
+         [VK_SUBPASS_INPUT_ATTACHMENT] = {
+            .count = subpass->input_count,
+            .attachments = subpass->input_attachments,
+         },
+         [VK_SUBPASS_COLOR_ATTACHMENT] = {
+            .count = subpass->color_count,
+            .attachments = subpass->color_attachments,
+         },
+         [VK_SUBPASS_COLOR_RESOLVE_ATTACHMENT] = {
+            .count = subpass->color_resolve_count,
+            .attachments = subpass->color_resolve_attachments,
+         },
+         [VK_SUBPASS_DS_ATTACHMENT] = {
+            .count = subpass->depth_stencil_attachment ? 1 : 0,
+            .attachments = subpass->depth_stencil_attachment,
+         },
+         [VK_SUBPASS_DS_RESOLVE_ATTACHMENT] = {
+            .count = subpass->depth_stencil_resolve_attachment ? 1 : 0,
+            .attachments = subpass->depth_stencil_resolve_attachment,
+         },
+         [VK_SUBPASS_FSR_ATTACHMENT] = {
+            .count = subpass->fragment_shading_rate_attachment ? 1 : 0,
+            .attachments = subpass->fragment_shading_rate_attachment,
+         },
+      },
+   };
+
+   for (++iter->cur.type; iter->cur.type < VK_SUBPASS_ATTACHMENT_TYPE_COUNT;
+        ++iter->cur.type) {
+      if (iter->types[iter->cur.type].count)
+         return &iter->types[iter->cur.type].attachments[0];
+   }
+
+   return NULL;
+}
+
+static inline struct vk_subpass_attachment *
+vk_subpass_next_attachment(struct vk_subpass_attachment_iter *iter)
+{
+   if (iter->cur.type >= VK_SUBPASS_ATTACHMENT_TYPE_COUNT)
+      return NULL;
+
+   if (iter->cur.idx + 1 < iter->types[iter->cur.type].count)
+      return &iter->types[iter->cur.type].attachments[++iter->cur.idx];
+
+   iter->cur.idx = 0;
+   for (++iter->cur.type; iter->cur.type < VK_SUBPASS_ATTACHMENT_TYPE_COUNT;
+        ++iter->cur.type) {
+      if (iter->types[iter->cur.type].count)
+         return &iter->types[iter->cur.type].attachments[0];
+   }
+
+   return NULL;
+}
+
+#define vk_subpass_foreach_attachment(__subpass, __iter, __att)                \
+   for (struct vk_subpass_attachment *__att =                                  \
+           vk_subpass_first_attachment(__subpass, __iter);                     \
+        __att; __att = vk_subpass_next_attachment(__iter))
 
 /***/
 struct vk_render_pass_attachment {
@@ -294,7 +420,7 @@ struct vk_render_pass {
    uint32_t subpass_count;
 
    /** VkRenderPassCreateInfo2::subpasses */
-   struct vk_subpass *subpasses;
+   struct vk_subpass **subpasses;
 
    /** VkRenderPassCreateInfo2::dependencyCount */
    uint32_t dependency_count;
@@ -308,6 +434,87 @@ struct vk_render_pass {
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(vk_render_pass, base, VkRenderPass,
                                VK_OBJECT_TYPE_RENDER_PASS);
+
+static inline struct vk_subpass *
+vk_render_pass_get_subpass(const struct vk_render_pass *pass,
+                           uint32_t subpass_idx)
+{
+   assert(subpass_idx < pass->subpass_count);
+   return pass->subpasses[subpass_idx];
+}
+
+/***/
+struct vk_subpass_merging_attachment_ref {
+   /** The first subpass to write this color/depth-stencil attachment.
+    *
+    * If VK_ATTACHMENT_UNUSED, the attachment is not used by the subpasses
+    */
+   uint32_t subpass;
+
+   /** The index of this attachment in the first subpass color table */
+   uint32_t index;
+
+   /** Last subpass accessing this attachment. */
+   uint32_t last_access;
+
+   /** Number of subpasses using this attachment.
+    *
+    * If a subpass accesses it both as a render target and as an input it's
+    * only counted once.
+    */
+   uint32_t access_count;
+};
+
+/***/
+struct vk_subpass_merging_ctx {
+   /** First subpass considered for merging */
+   uint32_t first_subpass;
+   /** Last subpass considered for merging */
+   uint32_t last_subpass;
+   struct {
+      /** Color map for all subpasses covered by the group */
+      struct vk_subpass_merging_attachment_ref colors[MESA_VK_MAX_COLOR_ATTACHMENTS];
+      /** A mask of color attachments used so far */
+      uint32_t used_color_mask;
+      /** Reference to the depth attachment used by the group of subpasses */
+      struct vk_subpass_merging_attachment_ref depth;
+      /** Reference to the stencil attachment used by the group of subpasses */
+      struct vk_subpass_merging_attachment_ref stencil;
+   } attachments;
+};
+
+/** Return the next subpass range starting from start_subpass that can be merged
+ *
+ * into a single dynamic render pass. The driver can then consider this range
+ * for merging. The merging itself is done with
+ * vk_render_pass_merge_subpasses().
+ *
+ * :param pass: |in|  The render pass to consider
+ * :param first_subpass: |in|  The first subpass to consider
+ * :param ctx: |out|  Subpass merging info returned by the function
+ */
+void
+vk_render_pass_next_mergeable_range(struct vk_render_pass *pass,
+                                    uint32_t first_subpass,
+                                    uint32_t last_subpass,
+                                    struct vk_subpass_merging_ctx *ctx);
+
+/** Return a VkResult reflecting the success/failure of the subpass merging
+ *  process
+ *
+ * Once the driver has found a suitable subpass range to merge with the help
+ * of vk_render_pass_next_mergeable_range(), it can effectively merge this
+ * subpass range with vk_render_pass_merge_subpasses().
+ *
+ * :param pass: |in|  The render pass to consider
+ * :param alloc: |in|  The allocator to use for new vk_subpass object
+ * allocations
+ * :param ctx: |in|  Subpass merging info
+ */
+VkResult
+vk_render_pass_merge_subpasses(struct vk_render_pass *pass,
+                               const VkAllocationCallbacks *alloc,
+                               const struct vk_subpass_merging_ctx *ctx);
 
 /** Returns the VkPipelineRenderingCreateInfo for a graphics pipeline
  *
@@ -323,6 +530,38 @@ VK_DEFINE_NONDISP_HANDLE_CASTS(vk_render_pass, base, VkRenderPass,
  */
 const VkPipelineRenderingCreateInfo *
 vk_get_pipeline_rendering_create_info(const VkGraphicsPipelineCreateInfo *info);
+
+/** Returns the VkRenderingInputAttachmentIndexInfo for a graphics pipeline
+ *
+ * For render-pass-free drivers, this can be used in the implementation of
+ * vkCreateGraphicsPipelines to get the VkRenderingInputAttachmentIndexInfo.
+ * If VkGraphicsPipelineCreateInfo::renderPass is not VK_NULL_HANDLE, it will
+ * return a representation of the specified subpass as a
+ * VkRenderingInputAttachmentIndexInfo.  If
+ * VkGraphicsPipelineCreateInfo::renderPass
+ * is VK_NULL_HANDLE and there is a VkRenderingInputAttachmentIndexInfo in the
+ * pNext chain of VkGraphicsPipelineCreateInfo, it will return that.
+ *
+ * :param info: |in|  One of the pCreateInfos from vkCreateGraphicsPipelines
+ */
+const VkRenderingInputAttachmentIndexInfo *
+vk_get_pipeline_rendering_ial_info(const VkGraphicsPipelineCreateInfo *info);
+
+/** Returns the VkRenderingAttachmentLocationInfo for a graphics pipeline
+ *
+ * For render-pass-free drivers, this can be used in the implementation of
+ * vkCreateGraphicsPipelines to get the VkRenderingAttachmentLocationInfo.
+ * If VkGraphicsPipelineCreateInfo::renderPass is not VK_NULL_HANDLE, it will
+ * return a representation of the specified subpass as a
+ * VkRenderingInputAttachmentIndexInfo.  If
+ * VkGraphicsPipelineCreateInfo::renderPass
+ * is VK_NULL_HANDLE and there is a VkRenderingAttachmentLocationInfo in the
+ * pNext chain of VkGraphicsPipelineCreateInfo, it will return that.
+ *
+ * :param info: |in|  One of the pCreateInfos from vkCreateGraphicsPipelines
+ */
+const VkRenderingAttachmentLocationInfo *
+vk_get_pipeline_rendering_cal_info(const VkGraphicsPipelineCreateInfo *info);
 
 /** Returns any extra VkPipelineCreateFlags from the render pass
  *
@@ -423,12 +662,13 @@ vk_get_command_buffer_rendering_attachment_location_info(
  * Return true if the subpass dependency is framebuffer-local.
  */
 static bool
-vk_subpass_dependency_is_fb_local(const VkSubpassDependency2 *dep,
+vk_subpass_dependency_is_fb_local(VkDependencyFlags flags,
+                                  uint32_t src_subpass, uint32_t dst_subpass,
                                   VkPipelineStageFlags2 src_stage_mask,
                                   VkPipelineStageFlags2 dst_stage_mask)
 {
-   if (dep->srcSubpass == VK_SUBPASS_EXTERNAL ||
-       dep->dstSubpass == VK_SUBPASS_EXTERNAL)
+   if (src_subpass == VK_SUBPASS_EXTERNAL ||
+       dst_subpass == VK_SUBPASS_EXTERNAL)
       return true;
 
   /* This is straight from the Vulkan 1.2 spec, section 7.1.4 "Framebuffer
@@ -451,7 +691,7 @@ vk_subpass_dependency_is_fb_local(const VkSubpassDependency2 *dep,
       return false;
 
    /* Check for framebuffer-local dependency. */
-   return dep->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT;
+   return flags & VK_DEPENDENCY_BY_REGION_BIT;
 }
 
 uint32_t

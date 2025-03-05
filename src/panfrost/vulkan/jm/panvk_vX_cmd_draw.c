@@ -193,6 +193,7 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
                 dyn_gfx_state_dirty(cmdbuf, CB_BLEND_EQUATIONS) ||
                 dyn_gfx_state_dirty(cmdbuf, CB_WRITE_MASKS) ||
                 dyn_gfx_state_dirty(cmdbuf, CB_BLEND_CONSTANTS) ||
+                dyn_gfx_state_dirty(cmdbuf, COLOR_ATTACHMENT_MAP) ||
                 dyn_gfx_state_dirty(cmdbuf, DS_DEPTH_TEST_ENABLE) ||
                 dyn_gfx_state_dirty(cmdbuf, DS_DEPTH_WRITE_ENABLE) ||
                 dyn_gfx_state_dirty(cmdbuf, DS_DEPTH_COMPARE_OP) ||
@@ -221,7 +222,7 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
    const struct vk_depth_stencil_state *ds = &dyns->ds;
    const struct panvk_shader *fs = get_fs(cmdbuf);
    const struct pan_shader_info *fs_info = fs ? &fs->info : NULL;
-   unsigned bd_count = MAX2(cb->attachment_count, 1);
+   uint32_t bd_count = MAX2(cb->attachment_count, 1);
    bool test_s = has_stencil_att(cmdbuf) && ds->stencil.test_enable;
    bool test_z = has_depth_att(cmdbuf) && ds->depth.test_enable;
    bool writes_z = writes_depth(cmdbuf);
@@ -265,12 +266,16 @@ panvk_draw_prepare_fs_rsd(struct panvk_cmd_buffer *cmdbuf,
                                  8));
          }
 
-         uint8_t rt_written = fs_info->outputs_written >> FRAG_RESULT_DATA0;
+         uint8_t rt_written = color_attachment_written_mask(
+            fs, &cmdbuf->vk.dynamic_graphics_state.cal);
+         uint8_t rt_read =
+            color_attachment_read_mask(fs, &cmdbuf->state.gfx.sysvals);
          uint8_t rt_mask = cmdbuf->state.gfx.render.bound_attachments &
                            MESA_VK_RP_ATTACHMENT_ANY_COLOR_BITS;
          cfg.properties.allow_forward_pixel_to_kill =
             fs_info->fs.can_fpk && !(rt_mask & ~rt_written) &&
-            !alpha_to_coverage && !binfo->any_dest_read;
+            !(rt_read & rt_written) && !alpha_to_coverage &&
+            !binfo->any_dest_read;
 
          bool writes_zs = writes_z || writes_s;
          bool zs_always_passes = ds_test_always_passes(cmdbuf);
@@ -925,9 +930,10 @@ set_provoking_vertex_mode(struct panvk_cmd_buffer *cmdbuf)
    /* If this is not the first draw, first_provoking_vertex should match
     * the one from the previous draws. Unfortunately, we can't check it
     * when the render pass is inherited. */
-   assert(!cmdbuf->cur_batch->fb.desc.gpu ||
+   assert(!cmdbuf->state.gfx.render.fb.provoking_vertex_set ||
           fbinfo->first_provoking_vertex == first_provoking_vertex);
 
+   cmdbuf->state.gfx.render.fb.provoking_vertex_set = true;
    fbinfo->first_provoking_vertex = first_provoking_vertex;
 }
 
@@ -1254,22 +1260,25 @@ panvk_cmd_draw(struct panvk_cmd_buffer *cmdbuf, struct panvk_draw_data *draw)
          return;
    }
 
+   panvk_per_arch(cmd_prepare_draw_sysvals)(cmdbuf, &draw->info);
+
+   /* Viewport emission requires up-to-date {scale,offset}.z for min/max Z,
+    * so we need to call it after calling cmd_prepare_draw_sysvals(), but
+    * viewports are the same for all layers, so we only emit when layer_id=0.
+    */
+   result = panvk_draw_prepare_viewport(cmdbuf, draw);
+   if (result != VK_SUCCESS)
+      return;
+
    for (uint32_t i = 0; i < layer_count; i++) {
       draw->info.layer_id = i;
       result = panvk_draw_prepare_varyings(cmdbuf, draw);
       if (result != VK_SUCCESS)
          return;
 
-      panvk_per_arch(cmd_prepare_draw_sysvals)(cmdbuf, &draw->info);
-
-      /* Viewport emission requires up-to-date {scale,offset}.z for min/max Z,
-       * so we need to call it after calling cmd_prepare_draw_sysvals(), but
-       * viewports are the same for all layers, so we only emit when layer_id=0.
-       */
-      if (i == 0) {
-         result = panvk_draw_prepare_viewport(cmdbuf, draw);
-         if (result != VK_SUCCESS)
-            return;
+      if (i > 0) {
+         cmdbuf->state.gfx.sysvals.layer_id = i;
+         gfx_state_set_dirty(cmdbuf, FS_PUSH_UNIFORMS);
       }
 
       result = panvk_per_arch(cmd_prepare_push_uniforms)(
