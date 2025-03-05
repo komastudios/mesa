@@ -1458,99 +1458,6 @@ radv_graphics_shaders_link(const struct radv_device *device, const struct radv_g
    }
 }
 
-/**
- * Fist pass of varying optimization.
- * This function is called for each shader pair from first to last.
- *
- * 1. Run some NIR passes in preparation.
- * 2. Optimize varyings.
- * 3. If either shader changed, run algebraic optimizations.
- */
-static void
-radv_graphics_shaders_link_varyings_first(struct radv_shader_stage *producer_stage,
-                                          struct radv_shader_stage *consumer_stage)
-{
-   nir_shader *producer = producer_stage->nir;
-   nir_shader *consumer = consumer_stage->nir;
-
-   /* It is expected by nir_opt_varyings that no undefined stores are present in the shader. */
-   NIR_PASS(_, producer, nir_opt_undef);
-
-   /* Update load/store alignments because inter-stage code motion may move instructions used to deduce this info. */
-   NIR_PASS(_, consumer, nir_opt_load_store_update_alignments);
-
-   /* Scalarize all I/O, because nir_opt_varyings and nir_opt_vectorize_io expect all I/O to be scalarized. */
-   NIR_PASS(_, producer, nir_lower_io_to_scalar, nir_var_shader_out, NULL, NULL);
-   NIR_PASS(_, consumer, nir_lower_io_to_scalar, nir_var_shader_in, NULL, NULL);
-
-   /* Eliminate useless vec->mov copies resulting from scalarization. */
-   NIR_PASS(_, producer, nir_copy_prop);
-
-   const nir_opt_varyings_progress p = nir_opt_varyings(producer, consumer, true, 0, 0);
-
-   /* Run algebraic optimizations on shaders that changed. */
-   if (p & nir_progress_producer) {
-      radv_optimize_nir_algebraic(producer, false, false);
-   }
-   if (p & nir_progress_consumer) {
-      radv_optimize_nir_algebraic(consumer, false, false);
-   }
-}
-
-/**
- * Second pass of varying optimization.
- * This function is called for each shader pair from last to fist,
- * after the first pass had already been called for each pair.
- * Done because the previous pass might have enabled additional
- * opportunities for optimization.
- *
- * 1. Optimize varyings again.
- * 2. If either shader changed, run algebraic optimizations.
- * 3. Run some NIR passes to clean up the shaders.
- */
-static void
-radv_graphics_shaders_link_varyings_second(struct radv_shader_stage *producer_stage,
-                                           struct radv_shader_stage *consumer_stage)
-{
-   nir_shader *producer = producer_stage->nir;
-   nir_shader *consumer = consumer_stage->nir;
-
-   const nir_opt_varyings_progress p = nir_opt_varyings(producer, consumer, true, 0, 0);
-
-   /* Run algebraic optimizations on shaders that changed. */
-   if (p & nir_progress_producer) {
-      radv_optimize_nir_algebraic(producer, true, false);
-   }
-   if (p & nir_progress_consumer) {
-      radv_optimize_nir_algebraic(consumer, true, false);
-   }
-
-   /* Re-vectorize I/O for stages that output to memory (LDS or VRAM).
-    * Don't vectorize FS inputs, doing so just regresses shader stats without any benefit.
-    * There is also no benefit from re-vectorizing the outputs of the last pre-rasterization
-    * stage here, because ac_nir_lower_ngg/legacy already takes care of that.
-    */
-   if (consumer->info.stage != MESA_SHADER_FRAGMENT) {
-      NIR_PASS(_, producer, nir_opt_vectorize_io, nir_var_shader_out);
-      NIR_PASS(_, consumer, nir_opt_vectorize_io, nir_var_shader_in);
-   }
-
-   /* Gather shader info; at least the I/O info likely changed
-    * and changes to only the I/O info are not reflected in nir_opt_varyings_progress.
-    */
-   nir_shader_gather_info(producer, nir_shader_get_entrypoint(producer));
-   nir_shader_gather_info(consumer, nir_shader_get_entrypoint(consumer));
-
-   /* Recompute intrinsic bases of PS inputs in order to remove gaps. */
-   if (consumer->info.stage == MESA_SHADER_FRAGMENT)
-      radv_recompute_fs_input_bases(consumer);
-
-   /* Recreate XFB info from intrinsics (nir_opt_varyings may have changed it). */
-   if (producer->xfb_info) {
-      nir_gather_xfb_info_from_intrinsics(producer);
-   }
-}
-
 static void
 radv_graphics_shaders_fill_linked_vs_io_info(struct radv_shader_stage *vs_stage,
                                              struct radv_shader_stage *consumer_stage)
@@ -1649,38 +1556,121 @@ radv_graphics_shaders_fill_linked_io_info(struct radv_shader_stage *producer_sta
  * than running the same optimizations on I/O derefs.
  */
 static void
-radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages)
+radv_graphics_shaders_link_varyings(struct radv_shader_stage *stages, const VkShaderStageFlagBits active_nir_stages)
 {
+   /* Prepare shaders before running nir_opt_varyings. */
+   radv_foreach_stage (s, active_nir_stages) {
+      nir_shader *shader = stages[s].nir;
+
+      /* It is expected by nir_opt_varyings that no undefined stores are present in the shader. */
+      NIR_PASS(_, shader, nir_opt_undef);
+
+      /* Update load/store alignments because inter-stage code motion may move instructions used to deduce this info. */
+      NIR_PASS(_, shader, nir_opt_load_store_update_alignments);
+
+      /* Scalarize I/O, because nir_opt_varyings and nir_opt_vectorize_io expect all I/O to be scalarized. */
+      nir_variable_mode sca_mode = nir_var_shader_in;
+      bool sca_progress = false;
+      if (s != MESA_SHADER_FRAGMENT)
+         sca_mode |= nir_var_shader_out;
+      NIR_PASS(sca_progress, shader, nir_lower_io_to_scalar, sca_mode, NULL, NULL);
+
+      if (sca_progress) {
+         /* Eliminate useless vec->mov copies resulting from scalarization. */
+         NIR_PASS(_, shader, nir_copy_prop);
+
+         /* Eliminate unused input loads. */
+         NIR_PASS(_, shader, nir_opt_dce);
+      }
+   }
+
+   int highest_changed_producer = -1;
+
    /* Optimize varyings from first to last stage. */
-   gl_shader_stage prev = MESA_SHADER_NONE;
    for (int i = 0; i < ARRAY_SIZE(graphics_shader_order); ++i) {
-      gl_shader_stage s = graphics_shader_order[i];
-      if (!stages[s].nir)
+      const gl_shader_stage s = graphics_shader_order[i];
+      const gl_shader_stage next = stages[s].info.next_stage;
+      if (!stages[s].nir || next == MESA_SHADER_NONE)
          continue;
 
-      if (prev != MESA_SHADER_NONE) {
-         if (!stages[prev].key.optimisations_disabled && !stages[s].key.optimisations_disabled)
-            radv_graphics_shaders_link_varyings_first(&stages[prev], &stages[s]);
-      }
+      if (stages[s].key.optimisations_disabled || stages[next].key.optimisations_disabled)
+         continue;
 
-      prev = s;
+      nir_shader *producer = stages[s].nir;
+      nir_shader *consumer = stages[next].nir;
+
+      const nir_opt_varyings_progress p = nir_opt_varyings(producer, consumer, true, 0, 0);
+
+      /* Run algebraic optimizations on shaders that changed. */
+      if (p & nir_progress_producer) {
+         radv_optimize_nir_algebraic(producer, false, false);
+         highest_changed_producer = i;
+      }
+      if (p & nir_progress_consumer) {
+         radv_optimize_nir_algebraic(consumer, false, false);
+      }
    }
 
    /* Optimize varyings from last to first stage. */
-   gl_shader_stage next = MESA_SHADER_NONE;
-   for (int i = ARRAY_SIZE(graphics_shader_order) - 1; i >= 0; --i) {
-      gl_shader_stage s = graphics_shader_order[i];
-      if (!stages[s].nir)
+   for (int i = highest_changed_producer; i >= 0; --i) {
+      const gl_shader_stage s = graphics_shader_order[i];
+      const gl_shader_stage next = stages[s].info.next_stage;
+      if (!stages[s].nir || next == MESA_SHADER_NONE)
          continue;
 
-      if (next != MESA_SHADER_NONE) {
-         if (!stages[s].key.optimisations_disabled && !stages[next].key.optimisations_disabled)
-            radv_graphics_shaders_link_varyings_second(&stages[s], &stages[next]);
+      if (stages[s].key.optimisations_disabled || stages[next].key.optimisations_disabled)
+         continue;
 
-         radv_graphics_shaders_fill_linked_io_info(&stages[s], &stages[next]);
+      nir_shader *producer = stages[s].nir;
+      nir_shader *consumer = stages[next].nir;
+
+      const nir_opt_varyings_progress p = nir_opt_varyings(producer, consumer, true, 0, 0);
+
+      /* Run algebraic optimizations on shaders that changed. */
+      if (p & nir_progress_producer) {
+         radv_optimize_nir_algebraic(producer, true, false);
+      }
+      if (p & nir_progress_consumer) {
+         radv_optimize_nir_algebraic(consumer, true, false);
+      }
+   }
+
+   /* Run optimizations and fixups after linking. */
+   radv_foreach_stage (s, active_nir_stages) {
+      nir_shader *shader = stages[s].nir;
+
+      /* Re-vectorize I/O for stages that output to memory (LDS or VRAM).
+       * Don't vectorize FS I/O, doing so just regresses shader stats without any benefit.
+       * There is also no benefit from re-vectorizing the outputs of the last pre-rasterization
+       * stage here, because ac_nir_lower_ngg/legacy already takes care of that.
+       */
+      if (s != MESA_SHADER_FRAGMENT) {
+         nir_variable_mode vec_mode = nir_var_shader_in;
+         if (!radv_is_last_vgt_stage(&stages[s]))
+            vec_mode |= nir_var_shader_out;
+
+         NIR_PASS(_, shader, nir_opt_vectorize_io, vec_mode);
       }
 
-      next = s;
+      /* Gather shader info; at least the I/O info likely changed
+       * and changes to only the I/O info are not reflected in nir_opt_varyings_progress.
+       */
+      nir_shader_gather_info(shader, nir_shader_get_entrypoint(shader));
+
+      /* Recompute intrinsic bases of PS inputs in order to remove gaps. */
+      if (s == MESA_SHADER_FRAGMENT)
+         radv_recompute_fs_input_bases(shader);
+
+      /* Recreate XFB info from intrinsics (nir_opt_varyings may have changed it). */
+      if (shader->xfb_info) {
+         nir_gather_xfb_info_from_intrinsics(shader);
+      }
+   }
+
+   radv_foreach_stage (s, active_nir_stages) {
+      const gl_shader_stage next = stages[s].info.next_stage;
+      if (next != MESA_SHADER_NONE)
+         radv_graphics_shaders_fill_linked_io_info(&stages[s], &stages[next]);
    }
 }
 
@@ -2051,8 +2041,7 @@ radv_fill_shader_info_ngg(struct radv_device *device, struct radv_shader_stage *
       }
 
       struct radv_shader_stage *last_vgt_stage = NULL;
-      radv_foreach_stage(i, active_nir_stages)
-      {
+      radv_foreach_stage (i, active_nir_stages) {
          if (radv_is_last_vgt_stage(&stages[i])) {
             last_vgt_stage = &stages[i];
          }
@@ -2173,8 +2162,7 @@ radv_fill_shader_info(struct radv_device *device, const enum radv_pipeline_type 
                       const struct radv_graphics_state_key *gfx_state, struct radv_shader_stage *stages,
                       VkShaderStageFlagBits active_nir_stages)
 {
-   radv_foreach_stage(i, active_nir_stages)
-   {
+   radv_foreach_stage (i, active_nir_stages) {
       bool consider_force_vrs = false;
 
       if (radv_is_last_vgt_stage(&stages[i])) {
@@ -2656,8 +2644,7 @@ radv_graphics_shaders_compile(struct radv_device *device, struct vk_pipeline_cac
       NIR_PASS(_, mesh, nir_lower_compute_system_values, &o);
    }
 
-   radv_foreach_stage(i, active_nir_stages)
-   {
+   radv_foreach_stage (i, active_nir_stages) {
       gl_shader_stage next_stage;
 
       if (stages[i].next_stage != MESA_SHADER_NONE) {
@@ -2686,8 +2673,7 @@ radv_graphics_shaders_compile(struct radv_device *device, struct vk_pipeline_cac
 
    /* Remove all varyings when the fragment shader is a noop. */
    if (noop_fs) {
-      radv_foreach_stage(i, active_nir_stages)
-      {
+      radv_foreach_stage (i, active_nir_stages) {
          if (radv_is_last_vgt_stage(&stages[i])) {
             radv_remove_varyings(stages[i].nir);
             break;
@@ -2719,8 +2705,7 @@ radv_graphics_shaders_compile(struct radv_device *device, struct vk_pipeline_cac
    if (stages[MESA_SHADER_VERTEX].nir && !gfx_state->vs.has_prolog)
       NIR_PASS(_, stages[MESA_SHADER_VERTEX].nir, radv_nir_optimize_vs_inputs_to_const, gfx_state);
 
-   radv_foreach_stage(i, active_nir_stages)
-   {
+   radv_foreach_stage (i, active_nir_stages) {
       int64_t stage_start = os_time_get_nano();
 
       radv_optimize_nir(stages[i].nir, stages[i].key.optimisations_disabled);
@@ -2748,13 +2733,13 @@ radv_graphics_shaders_compile(struct radv_device *device, struct vk_pipeline_cac
    }
 
    /* Optimize varyings on lowered shader I/O (more efficient than optimizing I/O derefs). */
-   radv_graphics_shaders_link_varyings(stages);
+   radv_graphics_shaders_link_varyings(stages, active_nir_stages);
 
    /* Optimize constant clip/cull distance after linking to operate on scalar io in the last
     * pre raster stage.
     */
-   radv_foreach_stage(i, active_nir_stages & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT))
-   {
+   radv_foreach_stage (i,
+                       active_nir_stages & (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)) {
       if (stages[i].key.optimisations_disabled)
          continue;
 
@@ -2769,8 +2754,7 @@ radv_graphics_shaders_compile(struct radv_device *device, struct vk_pipeline_cac
 
    radv_declare_pipeline_args(device, stages, gfx_state, active_nir_stages);
 
-   radv_foreach_stage(i, active_nir_stages)
-   {
+   radv_foreach_stage (i, active_nir_stages) {
       int64_t stage_start = os_time_get_nano();
 
       radv_postprocess_nir(device, gfx_state, &stages[i]);
@@ -3067,8 +3051,7 @@ done:
                if (!gfx_pipeline_lib->base.active_stages)
                   continue;
 
-               radv_foreach_stage(s, gfx_pipeline_lib->base.active_stages)
-               {
+               radv_foreach_stage (s, gfx_pipeline_lib->base.active_stages) {
                   creation_feedback->pPipelineStageCreationFeedbacks[num_feedbacks++] = stages[s].feedback;
                }
             }
