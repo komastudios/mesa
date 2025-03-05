@@ -20,10 +20,10 @@ include:
 
 variables:
    DEBIAN_X86_64_BUILD_BASE_IMAGE: "debian/x86_64_build-base"
-   DEBIAN_BASE_TAG: "20250223-way-prot"
+   DEBIAN_BASE_TAG: "20250304-rust"
 
    DEBIAN_X86_64_BUILD_IMAGE_PATH: "debian/x86_64_build"
-   DEBIAN_BUILD_TAG: "20250217-wrappers"
+   DEBIAN_BUILD_TAG: "20250304-rust"
 
    DEBIAN_X86_64_TEST_BASE_IMAGE: "debian/x86_64_test-base"
    DEBIAN_ARM32_TEST_BASE_IMAGE: "debian/arm32_test-base"
@@ -45,9 +45,9 @@ variables:
    DEBIAN_PYUTILS_IMAGE: "debian/x86_64_pyutils"
    DEBIAN_PYUTILS_TAG: "20250129-lavacli"
 
-   ALPINE_X86_64_BUILD_TAG: "20250223-way-prot"
+   ALPINE_X86_64_BUILD_TAG: "20250304-rust"
    ALPINE_X86_64_LAVA_SSH_TAG: "20250124-spirv-tools"
-   FEDORA_X86_64_BUILD_TAG: "20250223-way-prot"
+   FEDORA_X86_64_BUILD_TAG: "20250304-rust"
 
    KERNEL_TAG: "v6.13-rc4-mesa-a34d"
    KERNEL_REPO: "gfx-ci/linux"

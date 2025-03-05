@@ -67,7 +67,6 @@ DEPS=(
     libwayland-egl-backend-dev
     "llvm-${LLVM_VERSION}-dev"
     ninja-build
-    meson
     openssh-server
     pkgconf
     python3-mako
@@ -89,6 +88,8 @@ apt-get -y install "${DEPS[@]}" "${EPHEMERAL[@]}"
 pip3 install --break-system-packages git+http://gitlab.freedesktop.org/freedesktop/ci-templates@ffe4d1b10aab7534489f0c4bbc4c5899df17d3f2
 
 arch=armhf
+. .gitlab-ci/container/install-meson.sh
+
 . .gitlab-ci/container/cross_build.sh
 
 . .gitlab-ci/container/container_pre_build.sh
@@ -100,8 +101,6 @@ arch=armhf
 . .gitlab-ci/container/build-llvm-spirv.sh
 
 . .gitlab-ci/container/build-libclc.sh
-
-. .gitlab-ci/container/install-meson.sh
 
 . .gitlab-ci/container/build-rust.sh
 
