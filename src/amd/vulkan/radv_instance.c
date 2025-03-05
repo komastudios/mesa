@@ -118,10 +118,10 @@ static const struct debug_control radv_perftest_options[] = {{"localbos", RADV_P
                                                              {NULL, 0}};
 
 static const struct debug_control radv_trap_excp_options[] = {
-   {"mem_viol", RADV_PERFTEST_LOCAL_BOS},
-   {"float_div_by_zero", RADV_PERFTEST_DCC_MSAA},
-   {"float_overflow", RADV_PERFTEST_BO_LIST},
-   {"float_underflow", RADV_PERFTEST_CS_WAVE_32},
+   {"mem_viol", RADV_TRAP_EXCP_MEM_VIOL},
+   {"float_div_by_zero", RADV_TRAP_EXCP_FLOAT_DIV_BY_ZERO},
+   {"float_overflow", RADV_TRAP_EXCP_FLOAT_OVERFLOW},
+   {"float_underflow", RADV_TRAP_EXCP_FLOAT_UNDERFLOW},
    {NULL, 0},
 };
 
@@ -256,7 +256,8 @@ radv_init_dri_options(struct radv_instance *instance)
    instance->drirc.flush_before_timestamp_write =
       driQueryOptionb(&instance->drirc.options, "radv_flush_before_timestamp_write");
 
-   instance->drirc.force_rt_wave64 = driQueryOptionb(&instance->drirc.options, "radv_rt_wave64");
+   if (driQueryOptionb(&instance->drirc.options, "radv_rt_wave64"))
+      instance->perftest_flags |= RADV_PERFTEST_RT_WAVE_64;
 
    instance->drirc.disable_dedicated_sparse_queue = driQueryOptionb(&instance->drirc.options, "radv_disable_dedicated_sparse_queue");
 
