@@ -26,6 +26,14 @@
 #include <windows.h>
 #endif
 
+#if defined(_WIN32)
+
+#define THREAD_DESCRIPTION_MAX_LEN 64
+
+typedef HRESULT (WINAPI *SetThreadDescriptionProc)(HANDLE hThread, PCWSTR lpThreadDescription);
+
+#endif
+
 #ifdef __FreeBSD__
 /* pthread_np.h -> sys/param.h -> machine/param.h
  * - defines ALIGN which clashes with our ALIGN
@@ -95,6 +103,15 @@ void u_thread_setname( const char *name )
 #else
 #warning Not sure how to call pthread_setname_np
 #endif
+#elif defined(_WIN32)
+   if (!name) return;
+   WCHAR wname[THREAD_DESCRIPTION_MAX_LEN+1];
+   FARPROC proc = GetProcAddress(GetModuleHandleA("kernelbase.dll"), "SetThreadDescription");
+   int res = MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, THREAD_DESCRIPTION_MAX_LEN);
+   if (proc && res > 0) {
+      wname[res] = 0;
+      ((SetThreadDescriptionProc)proc)(GetCurrentThread(), wname);
+   }
 #endif
    (void)name;
 }
