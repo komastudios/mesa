@@ -289,7 +289,7 @@ if freedreno_kmds.length() != 0 and freedreno_kmds != [ 'msm' ] and with_freedre
 endif
 
 with_dri = false
-if with_gallium and system_has_kms_drm
+if with_gallium and (system_has_kms_drm or host_machine.system() == 'darwin')
   _glx = get_option('glx')
   _egl = get_option('egl')
   if _glx == 'dri' or _egl.enabled() or (_glx == 'disabled' and _egl.allowed())
@@ -462,7 +462,7 @@ with_xlib_lease = get_option('xlib-lease') \
   .allowed()
 
 with_egl = get_option('egl') \
-  .require(with_platform_windows or with_platform_haiku or with_dri or with_platform_android, error_message : 'EGL requires DRI, Haiku, Windows or Android') \
+  .require(with_platform_windows or with_platform_haiku or with_dri or host_machine.system() == 'darwin' or with_platform_android, error_message : 'EGL requires DRI, Haiku, Windows or Android') \
   .require(with_shared_glapi, error_message : 'EGL requires shared-glapi') \
   .require(with_glx != 'xlib', error_message :'EGL requires DRI, but GLX is being built with xlib support') \
   .disable_auto_if(with_platform_haiku) \
@@ -1017,7 +1017,8 @@ elif host_machine.system() == 'windows'
       '-D_SCL_SECURE_NO_WARNINGS',
       '-D_SCL_SECURE_NO_DEPRECATE',
       '-D_ALLOW_KEYWORD_MACROS',
-      '-D_HAS_EXCEPTIONS=0', # Tell C++ STL to not use exceptions
+      '-D_SBCS',
+      '-D_ENABLE_EXTENDED_ALIGNED_STORAGE',
       '-DNOMINMAX',
     ]
   else
@@ -1675,7 +1676,7 @@ with_gallium_drisw_kms = false
 if system_has_kms_drm
   dep_libdrm = dependency(
     'libdrm', version : '>=' + _drm_ver,
-    required : with_dri2 or with_dri or with_gbm
+    required : false
   )
 else
   # We should prevent libdrm from being available when the target doesn't have it to avoid transitive
