@@ -54,9 +54,13 @@
 extern "C" {
 #endif
 
-
+#if !defined(OSMESA_NO_GL)
 #include <GL/gl.h>
+#endif
 
+#if !defined(GLAPI)
+#define GLAPI
+#endif
 
 #define OSMESA_MAJOR_VERSION 11
 #define OSMESA_MINOR_VERSION 2
@@ -107,6 +111,10 @@ extern "C" {
 #define OSMESA_CONTEXT_MAJOR_VERSION 0x36
 #define OSMESA_CONTEXT_MINOR_VERSION 0x37
 
+/*
+ * OpenGL ES 2.0 profile extension
+ */
+#define OSMESA_ES2_PROFILE           0xFF00E2
 
 typedef struct osmesa_context *OSMesaContext;
 

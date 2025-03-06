@@ -615,7 +615,8 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
       case OSMESA_PROFILE:
          profile = attribList[i+1];
          if (profile != OSMESA_CORE_PROFILE &&
-             profile != OSMESA_COMPAT_PROFILE)
+             profile != OSMESA_COMPAT_PROFILE &&
+             profile != OSMESA_ES2_PROFILE)
             return NULL;
          break;
       case OSMESA_CONTEXT_MAJOR_VERSION:
@@ -663,7 +664,10 @@ OSMesaCreateContextAttribs(const int *attribList, OSMesaContext sharelist)
     */
    memset(&attribs, 0, sizeof(attribs));
    attribs.profile = (profile == OSMESA_CORE_PROFILE)
-      ? API_OPENGL_CORE : API_OPENGL_COMPAT;
+      ? API_OPENGL_CORE : (profile == OSMESA_ES2_PROFILE) ? API_OPENGLES2 : API_OPENGL_COMPAT;
+   if (profile == OSMESA_ES2_PROFILE && version_major < 2) {
+      version_major = 2;
+   }
    attribs.major = version_major;
    attribs.minor = version_minor;
    attribs.flags = 0;  /* ST_CONTEXT_FLAG_x */
@@ -870,6 +874,9 @@ OSMesaGetIntegerv(GLint pname, GLint *value)
       return;
    case OSMESA_Y_UP:
       *value = osmesa->y_up;
+      return;
+   case OSMESA_ES2_PROFILE:
+      *value = GL_TRUE;
       return;
    case OSMESA_MAX_WIDTH:
       FALLTHROUGH;
