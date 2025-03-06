@@ -219,13 +219,13 @@ void
 lp_passmgr_dispose(struct lp_passmgr *mgr)
 {
 #if USE_NEW_PASS == 0
-   if (mgr->passmgr) {
+   if (mgr && mgr->passmgr) {
       LLVMDisposePassManager(mgr->passmgr);
       mgr->passmgr = NULL;
    }
 
 #if HAVE_CORO == 1
-   if (mgr->cgpassmgr) {
+   if (mgr && mgr->cgpassmgr) {
       LLVMDisposePassManager(mgr->cgpassmgr);
       mgr->cgpassmgr = NULL;
    }
